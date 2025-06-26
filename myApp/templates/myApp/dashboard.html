@@ -1,0 +1,170 @@
+{% extends 'myApp/base.html' %}
+{% load static %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<style>
+    .dashboard-wrapper {
+        padding: 40px 20px;
+        background: #f4f7fb;
+        min-height: 100vh;
+    }
+    .dashboard-card {
+        background: #fff;
+        border-radius: 16px;
+        box-shadow: 0 5px 30px rgba(0,0,0,0.05);
+        padding: 30px;
+        margin-bottom: 30px;
+    }
+    .dashboard-card h5 {
+        font-weight: 600;
+        margin-bottom: 15px;
+    }
+    .dashboard-header {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 30px;
+    }
+    .dashboard-header h2 {
+        font-weight: 700;
+        font-size: 28px;
+    }
+    @media (max-width: 768px) {
+        .dashboard-header h2 {
+            font-size: 22px;
+        }
+    }
+</style>
+
+<div class="dashboard-wrapper container">
+    <div class="dashboard-header">
+        <h2>Welcome, {{ request.user.first_name }}!</h2>
+        <a href="{% url 'logout' %}" class="btn btn-outline-danger">Logout</a>
+    </div>
+
+    <div class="dashboard-card">
+        <h5>Your Business Profile</h5>
+        <p><strong>Business Name:</strong> {{ business.business_name }}</p>
+        <p><strong>Industry:</strong> {{ business.industry }}</p>
+        <p><strong>Description:</strong> {{ business.description|default:'No description yet.' }}</p>
+        <a href="#" class="btn btn-sm btn-primary mt-2" data-bs-toggle="modal" data-bs-target="#editProfileModal">
+            Edit Profile
+        </a>
+    </div>
+
+    <div class="dashboard-card">
+        <h5>Bot Settings</h5>
+        <p><strong>Tone:</strong> {{ settings.tone|capfirst }}</p>
+        <p><strong>Fallback Message:</strong> {{ settings.fallback_message }}</p>
+        <p><strong>Mute Status:</strong> {{ settings.is_muted|yesno:"Muted,Active" }}</p>
+        <a href="#" class="btn btn-sm btn-primary mt-2">Edit Settings</a>
+    </div>
+
+    <div class="dashboard-card">
+        <h5>Training Data</h5>
+        <form method="post" enctype="multipart/form-data">
+            {% csrf_token %}
+            <div class="mb-2">
+                <input type="file" name="training_file" required class="form-control">
+            </div>
+            <input type="text" name="file_description" placeholder="Optional description..." class="form-control mb-2">
+            <button class="btn btn-sm btn-success" type="submit" name="upload_training">Upload Document</button>
+        </form>
+    
+        <ul class="mt-3">
+            {% for doc in training_docs %}
+              <li>
+                {{ doc.file.name|slice:"25:" }} — 
+                <small>{{ doc.uploaded_at|date:"M d, Y H:i" }}</small>
+                {% if doc.is_processed %}
+                  <span class="badge bg-success ms-2">✅ Processed</span>
+                {% else %}
+                  <span class="badge bg-warning text-dark ms-2">⏳ Processing</span>
+                {% endif %}
+              </li>
+            {% empty %}
+              <li>No training documents uploaded yet.</li>
+            {% endfor %}
+          </ul>
+          
+    </div>
+    
+
+    <div class="dashboard-card">
+        <h5>Connected Page</h5>
+        {% if page %}
+            <p><strong>Page Name:</strong> {{ page.page_name }}</p>
+            <p><strong>Status:</strong> {{ page.is_active|yesno:"Active,Disconnected" }}</p>
+            <a href="#" class="btn btn-sm btn-warning mt-2">Reconnect</a>
+        {% else %}
+            <p>No Facebook Page connected.</p>
+            <a href="#" class="btn btn-sm btn-success">Connect Now</a>
+        {% endif %}
+    </div>
+</div>
+
+
+<div class="modal fade" id="editProfileModal" tabindex="-1" aria-labelledby="editProfileLabel" aria-hidden="true">
+    <div class="modal-dialog">
+      <form method="post" class="modal-content">
+        {% csrf_token %}
+        <div class="modal-header">
+          <h5 class="modal-title" id="editProfileLabel">Edit Business Profile</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <div class="mb-3">
+            <label for="business_name" class="form-label">Business Name</label>
+            <input type="text" class="form-control" name="business_name" id="business_name" value="{{ business.business_name }}" required>
+          </div>
+          <div class="mb-3">
+            <label for="industry" class="form-label">Industry</label>
+            <select class="form-select" name="industry" id="industry" required>
+              <option value="Rental" {% if business.industry == "Rental" %}selected{% endif %}>Rental</option>
+              <option value="Ecommerce" {% if business.industry == "Ecommerce" %}selected{% endif %}>Ecommerce</option>
+              <option value="Healthcare" {% if business.industry == "Healthcare" %}selected{% endif %}>Healthcare</option>
+              <option value="Other" {% if business.industry == "Other" %}selected{% endif %}>Other</option>
+            </select>
+          </div>
+          <div class="mb-3">
+            <label for="description" class="form-label">Description</label>
+            <textarea class="form-control" name="description" id="description" rows="3">{{ business.description }}</textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="submit" name="update_profile" class="btn btn-primary">Save Changes</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Upload Processing Modal -->
+<div class="modal fade" id="uploadProcessingModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content text-center p-4">
+        <div class="spinner-border text-primary mb-3" role="status" style="width: 3rem; height: 3rem;"></div>
+        <h5>Processing your training document...</h5>
+        <p class="text-muted mb-0">This may take a few seconds. Please wait.</p>
+      </div>
+    </div>
+  </div>
+  
+  <script>
+    document.addEventListener("DOMContentLoaded", function () {
+        const form = document.querySelector('form[method="post"][enctype="multipart/form-data"]');
+        if (form) {
+            form.addEventListener("submit", function (e) {
+                const fileInput = form.querySelector('input[name="training_file"]');
+                if (fileInput && fileInput.files.length > 0) {
+                    const modal = new bootstrap.Modal(document.getElementById("uploadProcessingModal"));
+                    modal.show();
+                }
+            });
+        }
+    });
+    </script>
+    
+{% endblock %}

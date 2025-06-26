@@ -1,0 +1,51 @@
+{% extends 'myApp/base.html' %}
+{% load static %}
+
+{% block title %}Log In{% endblock %}
+
+{% block content %}
+<style>
+    .auth-wrapper {
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #f4f7fe;
+        padding: 30px;
+    }
+    .auth-card {
+        max-width: 420px;
+        width: 100%;
+        background: #fff;
+        padding: 40px;
+        border-radius: 16px;
+        box-shadow: 0 0 20px rgba(0,0,0,0.05);
+    }
+</style>
+
+<div class="auth-wrapper">
+    <div class="auth-card">
+        <h3 class="text-center mb-4 fw-bold">Welcome Back</h3>
+
+        <form method="post">
+            {% csrf_token %}
+            {{ form.non_field_errors }}
+            <div class="mb-3">
+                <label for="username" class="form-label">Email or Username</label>
+                {{ form.username }}
+            </div>
+            <div class="mb-3">
+                <label for="password" class="form-label">Password</label>
+                {{ form.password }}
+            </div>
+
+            <button type="submit" class="btn btn-primary w-100">Log In</button>
+
+            <p class="text-center mt-3">
+                Don't have an account?
+                <a href="{% url 'signup' %}">Sign up</a>
+            </p>
+        </form>
+    </div>
+</div>
+{% endblock %}

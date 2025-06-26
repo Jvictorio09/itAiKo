@@ -1,0 +1,671 @@
+{% extends 'myApp/base.html' %}
+{% load static %}
+{% block title %}Dashboard | YourBot{% endblock %}
+
+{% block content %}
+
+    {% include 'myApp/header.html' %}
+  <!-- Start Search box -->
+  <div class="hero-section">
+    <div class="container-fluid">
+     <div class="row g-0">
+      <div class="col-xl-7 col-lg-7 col-md-7">
+       <div class="hero-content">
+        <div class="sub-title" data-aos="fade-down" data-aos-duration="2000" data-aos-offset="100">
+         <p>
+          Text Generator
+         </p>
+        </div>
+        <h2 data-aos="flip-up" data-aos-delay="300" data-aos-duration="2000">
+         <span>
+          Text Generator
+         </span>
+         Helps You Write Better,
+         <span>
+          Faster
+         </span>
+         And
+         <span>
+          Smarter
+         </span>
+        </h2>
+        <div class="text-generator-box" data-aos="fade-down" data-aos-duration="2000" data-aos-offset="200">
+         <h3>
+          What is your request or topic?
+         </h3>
+         <div class="searchwrapper">
+          <div class="searchbox">
+           <div class="row align-items-center">
+            <div class="col-md-9">
+             <form>
+              <input class="form-control" placeholder="What is your request or topic?" type="text"/>
+             </form>
+            </div>
+            <div class="col-xl-3">
+             <form>
+              <button class="btn" type="submit">
+               Generate
+              </button>
+             </form>
+            </div>
+           </div>
+          </div>
+         </div>
+        </div>
+        <div class="short-prompt" data-aos="fade-zoom-in" data-aos-duration="1000">
+         <ul>
+          <li>
+           <p>
+            Quick Try :
+           </p>
+          </li>
+          <li>
+           <a href="#">
+            What is Ai?
+           </a>
+          </li>
+          <li>
+           <a href="#">
+            Wright a Blog About Ai!
+           </a>
+          </li>
+          <li>
+           <a href="#">
+            Help me debug
+           </a>
+          </li>
+         </ul>
+        </div>
+       </div>
+      </div>
+      <div class="col-xl-5 col-lg-5 col-md-5">
+       <div class="hero-image" data-aos="fade-up" data-aos-duration="2000" data-aos-offset="100">
+        <div class="effect">
+         <img alt="image" class="image-effect" src="{% static 'assets/img/all-img/robot.png' %}"/>
+         <img alt="image" class="image-effect" src="{% static 'assets/img/all-img/robot-2.png' %}"/>
+        </div>
+       </div>
+      </div>
+     </div>
+    </div>
+   </div>
+   <!-- Start Hero Section -->
+   <!-- Start Brand Section -->
+   <div class="brand-section">
+    <div class="container">
+     <div class="brand-title">
+      <h4>
+       Over 30k Top Class Brands Working with Aithm
+      </h4>
+     </div>
+     <div class="row align-items-center justify-content-between">
+      <div class="col-xl-2 col-lg-2 col-md-4 col-6">
+       <div class="single-brand" data-aos="fade-zoom-in" data-aos-delay="100">
+        <img alt="image" src="{% static 'assets/img/all-img/brand-1.png' %}"/>
+       </div>
+      </div>
+      <div class="col-xl-2 col-lg-2 col-md-4 col-6">
+       <div class="single-brand" data-aos="fade-zoom-in" data-aos-delay="200">
+        <img alt="image" src="{% static 'assets/img/all-img/brand-2.png' %}"/>
+       </div>
+      </div>
+      <div class="col-xl-2 col-lg-2 col-md-4 col-6">
+       <div class="single-brand" data-aos="fade-zoom-in" data-aos-delay="300">
+        <img alt="image" src="{% static 'assets/img/all-img/brand-3.png' %}"/>
+       </div>
+      </div>
+      <div class="col-xl-2 col-lg-2 col-md-4 col-6">
+       <div class="single-brand" data-aos="fade-zoom-in" data-aos-delay="400">
+        <img alt="image" src="{% static 'assets/img/all-img/brand-4.png' %}"/>
+       </div>
+      </div>
+      <div class="col-xl-2 col-lg-2 col-md-4 col-6">
+       <div class="single-brand" data-aos="fade-zoom-in" data-aos-delay="500">
+        <img alt="image" src="{% static 'assets/img/all-img/brand-5.png' %}"/>
+       </div>
+      </div>
+     </div>
+    </div>
+   </div>
+   <!-- End Brand Section -->
+   <!-- Start Features Section -->
+   <div class="features-section ptb-100">
+    <div class="container">
+     <div class="section-title" data-aos="fade-down" data-aos-offset="100">
+      <div class="sub-title">
+       <p>
+        Corporate Service
+       </p>
+      </div>
+      <h2>
+       Find an Ai Solution For Your Business.
+      </h2>
+     </div>
+     <div class="row">
+      <div class="col-xl-3 col-lg-6 col-sm-6">
+       <div class="feature-box" data-aos="fade-up" data-aos-delay="100">
+        <span>
+         Ai Features
+        </span>
+        <div class="icon">
+         <i class="fi fi-tr-memo-circle-check">
+         </i>
+        </div>
+        <h3>
+         Unique Content
+        </h3>
+        <p>
+         Our ai text generator will be give you a best solution.
+        </p>
+       </div>
+      </div>
+      <div class="col-xl-3 col-lg-6 col-sm-6">
+       <div class="feature-box" data-aos="fade-up" data-aos-delay="200">
+        <span>
+         Ai Features
+        </span>
+        <div class="icon">
+         <i class="fi fi-tr-hourglass-start">
+         </i>
+        </div>
+        <h3>
+         Quick Result
+        </h3>
+        <p>
+         Our ai text generator will be give you a best solution.
+        </p>
+       </div>
+      </div>
+      <div class="col-xl-3 col-lg-6 col-sm-6">
+       <div class="feature-box" data-aos="fade-up" data-aos-delay="300">
+        <span>
+         Ai Features
+        </span>
+        <div class="icon">
+         <i class="fi fi-tr-puzzle-alt">
+         </i>
+        </div>
+        <h3>
+         User Friendly
+        </h3>
+        <p>
+         Our ai text generator will be give you a best solution.
+        </p>
+       </div>
+      </div>
+      <div class="col-xl-3 col-lg-6 col-sm-6">
+       <div class="feature-box" data-aos="fade-up" data-aos-delay="400">
+        <span>
+         Ai Features
+        </span>
+        <div class="icon">
+         <i class="fi fi-tr-copy-image">
+         </i>
+        </div>
+        <h3>
+         Unlimited Result
+        </h3>
+        <p>
+         Our ai text generator will be give you a best solution.
+        </p>
+       </div>
+      </div>
+     </div>
+    </div>
+   </div>
+   <!-- End Features Section -->
+   <!-- Start Text Animation -->
+   <div class="text-animation-area">
+    <div class="container-fluid">
+     <div class="text-wapper-content">
+      <div class="text-left">
+       <span>
+        Text Generator
+       </span>
+       <span>
+        Text Animation
+       </span>
+       <span>
+        Live Cheat
+       </span>
+       <span>
+        Clean Text
+       </span>
+       <span>
+        Grammar Correction
+       </span>
+       <span>
+        Learn Language
+       </span>
+       <span>
+        Quinic Text
+       </span>
+       <span>
+        SEO Features
+       </span>
+      </div>
+      <div class="text-left right">
+       <span>
+        Text Animation
+       </span>
+       <span>
+        Quinic Text
+       </span>
+       <span>
+        Grammar Correction
+       </span>
+       <span>
+        Learn Language
+       </span>
+       <span>
+        SEO Features
+       </span>
+       <span>
+        Live Cheat
+       </span>
+       <span>
+        Clean Text
+       </span>
+       <span>
+        Text Generator
+       </span>
+      </div>
+     </div>
+    </div>
+   </div>
+   <!-- End Text Animation -->
+   <!-- Start About Section -->
+   <div class="about-section-2">
+    <div class="container">
+     <div class="about-1">
+      <div class="row align-items-top">
+       <div class="col-xl-6 col-md-7">
+        <div class="img-wrapper">
+         <div class="img-box" data-aos="fade-up" data-aos-offset="100">
+          <img alt="image" class="image-box-item" src="{% static 'assets/img/all-img/about-5.png' %}"/>
+          <img alt="image" class="image-box-item" src="{% static 'assets/img/all-img/about-7.png' %}"/>
+         </div>
+        </div>
+       </div>
+       <div class="col-xl-6 col-md-5">
+        <div class="about-content-2" data-aos="fade-down" data-aos-offset="100">
+         <div class="sub-title-1">
+          <p>
+           What Aithm Do
+          </p>
+         </div>
+         <h2>
+          Create your own AI business easily.
+         </h2>
+         <p>
+          AI systems can analyze data, recognize patterns, make decisions, and even adapt and improve over time. Whether it's speech recognition, image processing, or problem solving.
+         </p>
+         <a class="default-btn" href="#">
+          <span>
+           About Us
+          </span>
+          <i class="bx bx-chevron-right">
+          </i>
+         </a>
+        </div>
+       </div>
+      </div>
+     </div>
+     <div class="about-2">
+      <div class="row">
+       <div class="col-xl-6 col-md-5">
+        <div class="about-content-2" data-aos="fade-down" data-aos-offset="100">
+         <div class="counter">
+          <p>
+           AI systems can analyze data, recognize patterns, make decisions, and even adapt and improve over time. Whether it's speech recognition, image processing, or problem solving.
+          </p>
+          <div class="row justify-content-center">
+           <div class="col-xl-4 col-lg-4 col-sm-4 col-md-6 col-6">
+            <div class="counter-content">
+             <h2>
+              <span class="counter-num">
+               400
+              </span>
+             </h2>
+             <p>
+              Life Experiences
+             </p>
+            </div>
+           </div>
+           <div class="col-xl-4 col-lg-4 col-sm-4 col-md-6 col-6">
+            <div class="counter-content">
+             <h2>
+              <span class="counter-num">
+               85
+              </span>
+              +
+             </h2>
+             <p>
+              Text Experiences
+             </p>
+            </div>
+           </div>
+           <div class="col-xl-4 col-lg-4 col-sm-4 col-md-6 col-6">
+            <div class="counter-content">
+             <h2>
+              <span class="counter-num">
+               120
+              </span>
+              K
+             </h2>
+             <p>
+              Chatbot Support
+             </p>
+            </div>
+           </div>
+          </div>
+         </div>
+        </div>
+       </div>
+       <div class="col-xl-6 col-md-7">
+        <div class="img-wrapper part-1">
+         <div class="img-box part-1" data-aos="fade-up" data-aos-offset="100">
+          <img alt="image" class="image-box-item" src="{% static 'assets/img/all-img/about-4.png' %}"/>
+          <img alt="image" class="image-box-item" src="{% static 'assets/img/all-img/about-6.png' %}"/>
+         </div>
+        </div>
+       </div>
+      </div>
+     </div>
+    </div>
+   </div>
+   <!-- End About Section -->
+   <!-- Start video Section -->
+   <a class="video-url popup-youtube" href="https://youtu.be/VDVHbd3nNrM?si=atnpL-PwDDJ8DX6h">
+    <div class="video-section vid-bg-2">
+     <span id="tooltip">
+      play
+     </span>
+    </div>
+   </a>
+   <!-- Start video Section -->
+   <!-- Start Testimonial Section -->
+   <div class="testimonial-section pt-100 pb-70">
+    <div class="container">
+     <div class="section-title start-text" data-aos="fade-down" data-aos-offset="100">
+      <div class="sub-title">
+       <p>
+        User Experiences
+       </p>
+      </div>
+      <h2>
+       Reviews that speak volumes.
+      </h2>
+     </div>
+     <div class="testimonial-content owl-carousel owl-theme">
+      <div class="testimonial-item" data-aos="fade-up" data-aos-offset="100">
+       <ul>
+        <li>
+         <i class="bx bxs-star">
+         </i>
+        </li>
+        <li>
+         <i class="bx bxs-star">
+         </i>
+        </li>
+        <li>
+         <i class="bx bxs-star">
+         </i>
+        </li>
+        <li>
+         <i class="bx bxs-star">
+         </i>
+        </li>
+        <li>
+         <i class="bx bxs-star">
+         </i>
+        </li>
+       </ul>
+       <h4>
+        James Land
+       </h4>
+       <p>
+        "I'm very grateful to have learned so much about design and it's impact on businesses. I'm looking forward to building the Huneebee Project brand with your expertise by my side."
+       </p>
+      </div>
+      <div class="testimonial-item" data-aos="fade-up" data-aos-offset="200">
+       <ul>
+        <li>
+         <i class="bx bxs-star">
+         </i>
+        </li>
+        <li>
+         <i class="bx bxs-star">
+         </i>
+        </li>
+        <li>
+         <i class="bx bxs-star">
+         </i>
+        </li>
+        <li>
+         <i class="bx bxs-star">
+         </i>
+        </li>
+        <li>
+         <i class="bx bxs-star">
+         </i>
+        </li>
+       </ul>
+       <h4>
+        James Land
+       </h4>
+       <p>
+        "I'm very grateful to have learned so much about design and it's impact on businesses. I'm looking forward to building the Huneebee Project brand with your expertise by my side."
+       </p>
+      </div>
+      <div class="testimonial-item" data-aos="fade-up" data-aos-offset="300">
+       <ul>
+        <li>
+         <i class="bx bxs-star">
+         </i>
+        </li>
+        <li>
+         <i class="bx bxs-star">
+         </i>
+        </li>
+        <li>
+         <i class="bx bxs-star">
+         </i>
+        </li>
+        <li>
+         <i class="bx bxs-star">
+         </i>
+        </li>
+        <li>
+         <i class="bx bxs-star">
+         </i>
+        </li>
+       </ul>
+       <h4>
+        James Land
+       </h4>
+       <p>
+        "I'm very grateful to have learned so much about design and it's impact on businesses. I'm looking forward to building the Huneebee Project brand with your expertise by my side."
+       </p>
+      </div>
+      <div class="testimonial-item" data-aos="fade-up" data-aos-offset="400">
+       <ul>
+        <li>
+         <i class="bx bxs-star">
+         </i>
+        </li>
+        <li>
+         <i class="bx bxs-star">
+         </i>
+        </li>
+        <li>
+         <i class="bx bxs-star">
+         </i>
+        </li>
+        <li>
+         <i class="bx bxs-star">
+         </i>
+        </li>
+        <li>
+         <i class="bx bxs-star">
+         </i>
+        </li>
+       </ul>
+       <h4>
+        James Land
+       </h4>
+       <p>
+        "I'm very grateful to have learned so much about design and it's impact on businesses. I'm looking forward to building the Huneebee Project brand with your expertise by my side."
+       </p>
+      </div>
+     </div>
+    </div>
+   </div>
+   <!-- End Testimonial Section -->
+   <!-- Start Blog Section -->
+   <div class="blog-section pt-100 pb-70">
+    <div class="container">
+     <div class="row">
+      <div class="col-xl-4">
+       <div class="section-content" data-aos="fade-down" data-aos-offset="100">
+        <div class="sub-title">
+         <p>
+          Daily Blogs
+         </p>
+        </div>
+        <h2>
+         What's News?
+        </h2>
+        <p>
+         Lorem ipsum dolor, sit amet consectetur adipisicing elit. Ipsum dolore nobis quia accusamus fuga quaerat voluptas.
+        </p>
+        <a class="default-btn" href="#">
+         <span>
+          View More
+         </span>
+         <i class="bx bx-chevron-right">
+         </i>
+        </a>
+       </div>
+      </div>
+      <div class="col-xl-8">
+       <div class="blog-content" data-aos="fade-right" data-aos-offset="100">
+        <div class="row">
+         <div class="col-xl-3 col-sm-3">
+          <div class="blog-date">
+           <h4>
+            9 Mins Read
+           </h4>
+           <span>
+            23 Nov 2023
+           </span>
+          </div>
+         </div>
+         <div class="col-xl-7 col-sm-9">
+          <div class="blog-title">
+           <h2>
+            <a href="#">
+             The Evolution of AI: Features Shaping Tomorrow's Technology Landscape
+            </a>
+           </h2>
+           <p>
+            This comprehensive exploration unveils cutting-edge AI features, from enhanced learning sophisticated problem-solving.
+           </p>
+          </div>
+         </div>
+         <div class="col-xl-2">
+          <div class="blog-btn">
+           <a href="#">
+            Read More
+            <i class="bx bx-arrow-back bx-rotate-180">
+            </i>
+           </a>
+          </div>
+         </div>
+        </div>
+       </div>
+       <div class="blog-content" data-aos="fade-right" data-aos-offset="100">
+        <div class="row">
+         <div class="col-xl-3 col-sm-3">
+          <div class="blog-date">
+           <h4>
+            10 Mins Read
+           </h4>
+           <span>
+            25 Nov 2023
+           </span>
+          </div>
+         </div>
+         <div class="col-xl-7 col-sm-9">
+          <div class="blog-title">
+           <h2>
+            <a href="#">
+             Future Forward AI A Spotlight on Game Changing Features
+            </a>
+           </h2>
+           <p>
+            This comprehensive exploration unveils cutting-edge AI features, from enhanced learning sophisticated problem-solving.
+           </p>
+          </div>
+         </div>
+         <div class="col-xl-2">
+          <div class="blog-btn">
+           <a href="#">
+            Read More
+            <i class="bx bx-arrow-back bx-rotate-180">
+            </i>
+           </a>
+          </div>
+         </div>
+        </div>
+       </div>
+       <div class="blog-content" data-aos="fade-right" data-aos-offset="100">
+        <div class="row">
+         <div class="col-xl-3 col-sm-3">
+          <div class="blog-date">
+           <h4>
+            6 Mins Read
+           </h4>
+           <span>
+            23 Nov 2023
+           </span>
+          </div>
+         </div>
+         <div class="col-xl-7 col-sm-9">
+          <div class="blog-title">
+           <h2>
+            <a href="#">
+             Empowering Tomorrow AI Features Redefining the Digital Frontier
+            </a>
+           </h2>
+           <p>
+            This comprehensive exploration unveils cutting-edge AI features, from enhanced learning sophisticated problem-solving.
+           </p>
+          </div>
+         </div>
+         <div class="col-xl-2">
+          <div class="blog-btn">
+           <a href="#">
+            Read More
+            <i class="bx bx-arrow-back bx-rotate-180">
+            </i>
+           </a>
+          </div>
+         </div>
+        </div>
+       </div>
+      </div>
+     </div>
+    </div>
+   </div>
+  <!-- End Blog Section -->
+  <!-- Start Footer Area -->
+  
+  <!-- End Footer Area -->
+  <div class="go-top active">
+   <i class="bx bx-up-arrow-alt">
+   </i>
+  </div>
+  <!-- Links of JS files -->
+  {% include 'myApp/footer.html' %}
+{% endblock %}
