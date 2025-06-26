@@ -1,15 +1,14 @@
 import fitz  # PyMuPDF
 import docx
 import os
-from openai import OpenAI
 from dotenv import load_dotenv
 
-# Load .env just in case this module is used standalone
-dotenv_path = "C:/Users/ADMIN/Downloads/project/myProject/.env"
-load_dotenv(dotenv_path)
+from django.conf import settings
+import openai
 
-openai_api_key = os.getenv("OPENAI_API_KEY")
-client = OpenAI(api_key=openai_api_key)
+# âœ… Use Railway or settings.py
+openai.api_key = settings.OPENAI_API_KEY
+
 
 
 def extract_text_from_pdf(file_path):
@@ -45,7 +44,6 @@ from django.conf import settings
 import openai
 
 openai.api_key = settings.OPENAI_API_KEY
-
 def summarize_text_with_tone(text, tone="friendly", persona="Revvy"):
     messages = [
         {
@@ -61,7 +59,7 @@ Format your response as short bullet points or labeled sections. Only keep whatâ
 """
         }
     ]
-    response = openai.chat.completions.create(
+    response = openai.ChatCompletion.create(  # â† use this for openai>=1.0
         model="gpt-4",
         messages=messages
     )
@@ -69,15 +67,19 @@ Format your response as short bullet points or labeled sections. Only keep whatâ
 
 
 def process_training_file(training_doc, tone="friendly", persona="Revvy"):
-    file_path = training_doc.file.path
-    text = extract_text(file_path)
+    try:
+        file_path = training_doc.file.path
+        text = extract_text(file_path)
 
-    if not text:
-        raise ValueError("Failed to extract text from file.")
+        if not text:
+            raise ValueError("Failed to extract text from file.")
 
-    summary_prompt = summarize_text_with_tone(text, tone=tone, persona=persona)
+        summary_prompt = summarize_text_with_tone(text, tone=tone, persona=persona)
 
-    training_doc.text_content = text
-    training_doc.summary_prompt = summary_prompt
-    training_doc.is_processed = True
-    training_doc.save()
+        training_doc.text_content = text
+        training_doc.summary_prompt = summary_prompt
+        training_doc.is_processed = True
+        training_doc.save()
+    except Exception as e:
+        print(f"ðŸ”¥ Error processing training file: {e}")
+        raise
