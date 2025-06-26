@@ -72,3 +72,5 @@ pytz==2025.2
 
 lxml==5.4.0 
 python-docx==1.2.0
+
+PyMuPDF==1.25.5
