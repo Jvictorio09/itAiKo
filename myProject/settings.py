@@ -5,18 +5,9 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 env = environ.Env(DEBUG=(bool, False))
-env_file = "C:\\Users\\ADMIN\\Downloads\\EricaShoelineph\\.env"
+env = environ.Env()
+env.read_env(os.path.join(BASE_DIR, ".env"))  # Automatically reads if present
 
-
-
-
-if os.path.exists(env_file):
-    env.read_env(env_file)
-else:
-    if not os.environ.get("DATABASE_URL"):
-        raise Exception("⚠️ DATABASE_URL is not set in the environment!")
-    else:
-        print("No .env file found. Using system environment variables.")
 
 import os
 from dotenv import load_dotenv
