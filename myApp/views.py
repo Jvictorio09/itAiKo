@@ -10,7 +10,7 @@ dotenv_path = "C:/Users/ADMIN/Downloads/project/myProject/.env"
 load_dotenv(dotenv_path)
 
 openai_api_key = os.getenv("OPENAI_API_KEY")
-print("OPENAI KEY:", openai_api_key)
+
 
 openai.api_key = openai_api_key  # 👈 Set it here
 
