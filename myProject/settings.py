@@ -1,9 +1,22 @@
-
+import dj_database_url
+import os
+import environ
 from pathlib import Path
 
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+env = environ.Env(DEBUG=(bool, False))
+env_file = "C:\\Users\\ADMIN\\Downloads\\EricaShoelineph\\.env"
 
+
+
+
+if os.path.exists(env_file):
+    env.read_env(env_file)
+else:
+    if not os.environ.get("DATABASE_URL"):
+        raise Exception("⚠️ DATABASE_URL is not set in the environment!")
+    else:
+        print("No .env file found. Using system environment variables.")
 
 import os
 from dotenv import load_dotenv
@@ -50,6 +63,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    "whitenoise.middleware.WhiteNoiseMiddleware",
 ]
 
 ROOT_URLCONF = 'myProject.urls'
@@ -75,12 +89,18 @@ WSGI_APPLICATION = 'myProject.wsgi.application'
 
 
 
+
+
+
+# Database configuration using dj_database_url and environment variables.
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
-    }
+    "default": dj_database_url.config(
+        default=env("DATABASE_URL"),
+        conn_max_age=600,
+        ssl_require=True
+    )
 }
+
 
 
 
