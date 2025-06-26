@@ -71,4 +71,4 @@ tzlocal==5.3.1
 pytz==2025.2
 
 lxml==5.4.0 
-python==docx-1.2.0
+python-docx==1.2.0
