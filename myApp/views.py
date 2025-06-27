@@ -14,11 +14,8 @@ openai_api_key = os.getenv("OPENAI_API_KEY")
 
 openai.api_key = openai_api_key  # 👈 Set it here
 
-from django.http import HttpResponse
-
 def index(request):
-    return HttpResponse("✅ Django app is working!")
-
+    return render(request, 'myApp/index.html')
 
 
 import json
