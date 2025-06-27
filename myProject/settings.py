@@ -6,7 +6,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 env = environ.Env(DEBUG=(bool, False))
 env = environ.Env()
-env.read_env(os.path.join(BASE_DIR, ".env"))  # Automatically reads if present
+env.read_env(os.path.join(BASE_DIR, '.env'))  # Automatically reads if present
 
 
 import os
@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Add your key securely
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 
 
 # SECURITY WARNING: keep the secret key used in production secret!
@@ -26,10 +26,10 @@ SECRET_KEY = 'django-insecure-6#@gp17z-*6b%uda%oeymzx%#^w!oioe68noq#-#frhnwz-5^7
 DEBUG = True
 
 ALLOWED_HOSTS = [
-    "0.0.0.0",
-    "127.0.0.1",
-    "localhost",
-    "itaiko-production.up.railway.app",
+    '0.0.0.0',
+    '127.0.0.1',
+    'localhost',
+    'itaiko-production.up.railway.app',
 ]
 
 
@@ -54,7 +54,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    "whitenoise.middleware.WhiteNoiseMiddleware",
+    'whitenoise.middleware.WhiteNoiseMiddleware',
 ]
 
 ROOT_URLCONF = 'myProject.urls'
@@ -85,8 +85,8 @@ WSGI_APPLICATION = 'myProject.wsgi.application'
 
 # Database configuration using dj_database_url and environment variables.
 DATABASES = {
-    "default": dj_database_url.config(
-        default=env("DATABASE_URL"),
+    'default': dj_database_url.config(
+        default=env('DATABASE_URL'),
         conn_max_age=600,
         ssl_require=True
     )
