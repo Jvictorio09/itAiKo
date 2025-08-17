@@ -3,7 +3,7 @@ from myApp import views
 
 urlpatterns = [
     # Portal
-    path("", views.portal_home, name="portal_home"),
+    path("prtal/", views.portal_home, name="portal_home"),
     path("portal/login/", views.portal_login, name="portal_login"),
     path("portal/logout/", views.portal_logout, name="portal_logout"),
     path("portal/<slug:slug>/", views.portal_dashboard, name="portal_dashboard"),
@@ -26,4 +26,10 @@ urlpatterns = [
 
     # Messenger webhook (keep your implementation in views.py)
     path("messenger/<slug:slug>/webhook", views.webhook, name="messenger_webhook"),
+
+    path("legal/privacy/", views.legal_privacy, name="legal_privacy"),
+    path("legal/terms/", views.legal_terms, name="legal_terms"),
+    path("legal/data-deletion/", views.legal_data_deletion, name="legal_data_deletion"),
+    path("", views.about, name="about"),
+    path("contact/", views.contact, name="contact"),
 ]

@@ -930,3 +930,24 @@ def portal_api_resource_detail(request, slug, resource_id):
     # if Booking.objects.filter(resource=r).exists(): return HttpResponseBadRequest("has bookings")
     r.delete()
     return JsonResponse({"ok": True})
+
+
+
+# myApp/views_public.py
+from django.shortcuts import render
+from django.utils.timezone import now
+
+def legal_privacy(request):
+    return render(request, "legal/privacy.html", {"updated": now().date()})
+
+def legal_terms(request):
+    return render(request, "legal/terms.html", {"updated": now().date()})
+
+def legal_data_deletion(request):
+    return render(request, "legal/data_deletion.html", {"updated": now().date()})
+
+def about(request):
+    return render(request, "about.html", {})
+
+def contact(request):
+    return render(request, "contact.html", {})

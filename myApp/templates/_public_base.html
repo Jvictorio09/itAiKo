@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="utf-8" />
+  <title>{% block title %}Itsaiko{% endblock %}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  {% block meta %}{% endblock %}
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>html,body{font-family:Inter,system-ui,Segoe UI,Roboto,Arial}</style>
+</head>
+<body class="min-h-full bg-slate-50 flex flex-col">
+  <!-- NAV -->
+  <header class="sticky top-0 z-30 bg-white/80 backdrop-blur border-b border-slate-200">
+    <div class="mx-auto max-w-6xl px-4 py-3 flex items-center justify-between">
+      <a href="/" class="group inline-flex items-center gap-2">
+        <span class="inline-flex h-8 w-8 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-600"></span>
+        <span class="text-lg font-semibold tracking-tight">Itsaiko</span>
+      </a>
+      <nav class="flex items-center gap-3 text-sm">
+        <a class="px-3 py-2 rounded-lg hover:bg-slate-100" href="/about/">About</a>
+        <a class="px-3 py-2 rounded-lg hover:bg-slate-100" href="/legal/privacy/">Privacy</a>
+        <a class="px-3 py-2 rounded-lg hover:bg-slate-100" href="/legal/terms/">Terms</a>
+        <a class="px-3 py-2 rounded-lg hover:bg-slate-100" href="/legal/data-deletion/">Data Deletion</a>
+        <a class="px-3 py-2 rounded-lg hover:bg-slate-100" href="/contact/">Contact</a>
+      </nav>
+    </div>
+  </header>
+
+  <!-- HERO -->
+  <section class="relative">
+    <div class="absolute inset-0 bg-gradient-to-r from-indigo-600 to-violet-600"></div>
+    <div class="relative">
+      <div class="mx-auto max-w-6xl px-4 py-12 text-white">
+        <h1 class="text-3xl md:text-4xl font-bold tracking-tight">{% block hero_title %}Itsaiko{% endblock %}</h1>
+        <p class="mt-2 text-white/90 max-w-3xl">{% block hero_subtitle %}{% endblock %}</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- MAIN -->
+  <main class="grow">
+    <div class="mx-auto max-w-6xl px-4 py-8">
+      {% block content %}{% endblock %}
+    </div>
+  </main>
+
+  <!-- FOOTER -->
+  <footer class="border-t border-slate-200 bg-white">
+    <div class="mx-auto max-w-6xl px-4 py-6 text-sm text-slate-600 flex items-center justify-between flex-col md:flex-row gap-3">
+      <p>© <span id="y"></span> Itsaiko. All rights reserved.</p>
+      <p class="text-slate-500">Built for fast, polite, calendar-aware Messenger replies.</p>
+    </div>
+  </footer>
+  <script>document.getElementById('y').textContent = new Date().getFullYear()</script>
+</body>
+</html>

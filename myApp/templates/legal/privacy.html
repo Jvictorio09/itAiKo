@@ -1,0 +1,46 @@
+{% extends "_public_base.html" %}
+{% block title %}Privacy Policy – Itsaiko{% endblock %}
+{% block hero_title %}Privacy Policy{% endblock %}
+{% block hero_subtitle %}Transparent, minimal processing. Last updated: {{ updated }}.{% endblock %}
+
+{% block content %}
+<div class="prose max-w-none prose-slate">
+  <p><strong>Itsaiko</strong> provides an AI assistant for Facebook Messenger on behalf of businesses (“Clients”). We process messages solely to operate the service.</p>
+
+  <h2>Data we process</h2>
+  <ul>
+    <li><strong>Messenger metadata</strong> (Page-scoped IDs, webhook events) to route messages.</li>
+    <li><strong>Message text</strong> to generate a reply and (if enabled) check calendar availability.</li>
+    <li><strong>Operational logs</strong> (timestamps, request IDs, minimal error traces) for reliability & security.</li>
+  </ul>
+
+  <h2>What we don’t do</h2>
+  <ul>
+    <li>No selling of personal data.</li>
+    <li>No profile-building for advertising.</li>
+    <li>No persistent storage of full conversation history.</li>
+  </ul>
+
+  <h2>Sharing</h2>
+  <ul>
+    <li><strong>Meta (Facebook)</strong> as the messaging platform.</li>
+    <li><strong>AI model provider</strong> for generating replies; configured so API data isn’t used for training.</li>
+    <li>Hosting/monitoring providers under strict security and confidentiality.</li>
+  </ul>
+
+  <h2>Retention</h2>
+  <p>Message text is processed transiently to produce a reply. Operational logs are kept for a short period (typically ≤ 30 days) and then deleted.</p>
+
+  <h2>Security</h2>
+  <p>All endpoints over HTTPS, secrets stored server-side, and least-privilege access controls.</p>
+
+  <h2>Your rights</h2>
+  <p>Contact the Page you messaged for access/correction/deletion. You can also email us at <a href="mailto:juliavictorio16@gmail.com">juliavictorio16@gmail.com</a> and we’ll coordinate with the Page owner.</p>
+
+  <h2>Children</h2>
+  <p>Not intended for children under 13; we do not knowingly process their data.</p>
+
+  <h2>Contact</h2>
+  <p>Email: <a href="mailto:juliavictorio16@gmail.com">juliavictorio16@gmail.com</a></p>
+</div>
+{% endblock %}

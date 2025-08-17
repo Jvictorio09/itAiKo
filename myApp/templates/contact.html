@@ -1,0 +1,27 @@
+{% extends "_public_base.html" %}
+{% block title %}Contact – Itsaiko{% endblock %}
+{% block hero_title %}Contact{% endblock %}
+{% block hero_subtitle %}We’re happy to help with setup, reviews, or support.{% endblock %}
+
+{% block content %}
+<div class="grid md:grid-cols-2 gap-6">
+  <section class="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+    <h2 class="text-lg font-semibold">Get in touch</h2>
+    <p class="mt-2 text-slate-600">Fastest way is email. Include your Page name and a brief description.</p>
+    <a href="mailto:juliavictorio16@gmail.com"
+       class="mt-4 inline-flex items-center justify-center px-4 py-2 rounded-xl bg-indigo-600 text-white font-semibold hover:bg-indigo-700">
+      juliavictorio16@gmail.com
+    </a>
+  </section>
+
+  <section class="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+    <h2 class="text-lg font-semibold">Status & Uptime</h2>
+    <p class="mt-2 text-slate-600">All endpoints are served over HTTPS. We monitor health and rotate tokens as needed.</p>
+    <ul class="mt-3 space-y-2 text-slate-700">
+      <li>• Webhook online</li>
+      <li>• Privacy, Terms, Deletion pages live</li>
+      <li>• Minimal logging; no conversation hoarding</li>
+    </ul>
+  </section>
+</div>
+{% endblock %}
