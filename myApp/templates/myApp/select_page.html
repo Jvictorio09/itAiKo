@@ -1,0 +1,20 @@
+{% extends 'myApp/base.html' %}
+{% block title %}Select a Facebook Page{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+    <h3 class="mb-4">Choose the Facebook Page to connect</h3>
+    <form method="post">
+        {% csrf_token %}
+        <div class="list-group">
+            {% for page in pages %}
+                <label class="list-group-item">
+                    <input type="radio" name="selected_page" value="{{ page.id }}" required>
+                    {{ page.name }}
+                </label>
+            {% endfor %}
+        </div>
+        <button type="submit" class="btn btn-primary mt-4">Connect Selected Page</button>
+    </form>
+</div>
+{% endblock %}

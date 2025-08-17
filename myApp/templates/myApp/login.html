@@ -27,16 +27,30 @@
     <div class="auth-card">
         <h3 class="text-center mb-4 fw-bold">Welcome Back</h3>
 
-        <form method="post">
+        <form method="post" novalidate>
             {% csrf_token %}
-            {{ form.non_field_errors }}
+
+            <!-- Show non-field errors -->
+            {% if form.non_field_errors %}
+                <div class="alert alert-danger">
+                    {{ form.non_field_errors }}
+                </div>
+            {% endif %}
+
             <div class="mb-3">
-                <label for="username" class="form-label">Email or Username</label>
-                {{ form.username }}
+                <label for="login" class="form-label">Email or Username</label>
+                {{ form.login }}
+                {% if form.login.errors %}
+                    <div class="text-danger small">{{ form.login.errors.0 }}</div>
+                {% endif %}
             </div>
+            
             <div class="mb-3">
                 <label for="password" class="form-label">Password</label>
                 {{ form.password }}
+                {% if form.password.errors %}
+                    <div class="text-danger small">{{ form.password.errors.0 }}</div>
+                {% endif %}
             </div>
 
             <button type="submit" class="btn btn-primary w-100">Log In</button>

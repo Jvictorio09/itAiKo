@@ -18,6 +18,14 @@ load_dotenv()
 # Add your key securely
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 
+import os
+
+FACEBOOK_APP_ID = os.getenv('FACEBOOK_APP_ID')
+FACEBOOK_APP_SECRET = os.getenv('FACEBOOK_APP_SECRET')
+REDIRECT_URI = os.getenv('REDIRECT_URI')
+print('FB APP ID:', FACEBOOK_APP_ID)
+
+
 
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = 'django-insecure-6#@gp17z-*6b%uda%oeymzx%#^w!oioe68noq#-#frhnwz-5^7'
@@ -26,15 +34,19 @@ SECRET_KEY = 'django-insecure-6#@gp17z-*6b%uda%oeymzx%#^w!oioe68noq#-#frhnwz-5^7
 DEBUG = True
 
 ALLOWED_HOSTS = [
-    '0.0.0.0',
-    '127.0.0.1',
-    'localhost',
-    'itaiko-production.up.railway.app',
+    "0.0.0.0",
+    "127.0.0.1",
+    "localhost",
+    "itaiko-production.up.railway.app",
+    ".asse.devtunnels.ms",                 # allow any devtunnels subdomain
+    "k5177qxt-8000.asse.devtunnels.ms",    # current tunnel host
 ]
 
-
-CSRF_TRUSTED_ORIGINS = ['https://itaiko-production.up.railway.app']
-
+CSRF_TRUSTED_ORIGINS = [
+    "https://itaiko-production.up.railway.app",
+    "https://k5177qxt-8000.asse.devtunnels.ms",
+    "https://*.asse.devtunnels.ms",
+]
 
 # Application definition
 
@@ -137,3 +149,6 @@ STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+
+LOGIN_URL = '/login/'

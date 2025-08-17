@@ -39,6 +39,50 @@
     }
 </style>
 
+{% if show_welcome_modal %}
+<!-- Welcome Modal with steps -->
+<div class="modal fade" id="welcomeWizard" tabindex="-1" aria-hidden="true">
+  <!-- your wizard content here -->
+</div>
+
+<script>
+  window.addEventListener('load', () => {
+    const modal = new bootstrap.Modal(document.getElementById('welcomeWizard'));
+    modal.show();
+
+    const steps = document.querySelectorAll('.wizard-step');
+    let currentStep = 0;
+
+    document.querySelectorAll('.next-step').forEach(button => {
+      button.addEventListener('click', () => {
+        steps[currentStep].classList.add('d-none');
+        currentStep++;
+        steps[currentStep].classList.remove('d-none');
+      });
+    });
+
+    document.getElementById('finishWizard').addEventListener('click', async () => {
+      const businessName = document.getElementById('businessName').value;
+      const industry = document.getElementById('industry').value;
+      const description = document.getElementById('description').value;
+
+      await fetch("{% url 'save_business_profile' %}", {
+        method: "POST",
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRFToken': '{{ csrf_token }}'
+        },
+        body: JSON.stringify({ business_name: businessName, industry, description })
+      });
+
+      modal.hide();
+    });
+  });
+</script>
+{% endif %}
+
+
+
 <div class="dashboard-wrapper container">
     <div class="dashboard-header">
         <h2>Welcome, {{ request.user.first_name }}!</h2>
@@ -94,16 +138,27 @@
     
 
     <div class="dashboard-card">
-        <h5>Connected Page</h5>
-        {% if page %}
-            <p><strong>Page Name:</strong> {{ page.page_name }}</p>
-            <p><strong>Status:</strong> {{ page.is_active|yesno:"Active,Disconnected" }}</p>
-            <a href="#" class="btn btn-sm btn-warning mt-2">Reconnect</a>
-        {% else %}
-            <p>No Facebook Page connected.</p>
-            <a href="#" class="btn btn-sm btn-success">Connect Now</a>
-        {% endif %}
-    </div>
+      <h5>Connected Page</h5>
+      {% if page %}
+          <p><strong>Page Name:</strong> {{ page.page_name }}</p>
+          <p><strong>Status:</strong> 
+              {% if page.is_active %}
+                  <span class="text-success fw-semibold">Active</span>
+              {% else %}
+                  <span class="text-danger fw-semibold">Disconnected</span>
+              {% endif %}
+          </p>
+          <a href="{% url 'connect_facebook_page' %}?force=1" class="btn btn-sm btn-warning mt-2">
+              🔁 Reconnect
+          </a>
+      {% else %}
+          <p>No Facebook Page connected.</p>
+          <a href="{% url 'connect_facebook_page' %}" class="btn btn-sm btn-success">
+              ✅ Connect Now
+          </a>
+      {% endif %}
+  </div>
+  
 </div>
 
 
@@ -166,5 +221,32 @@
         }
     });
     </script>
+
+{% if messages %}
+<div class="modal fade" id="successModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content p-4 text-center">
+      <h5 class="fw-bold text-success">🎉 Page Connected Successfully!</h5>
+      {% for message in messages %}
+  {% if forloop.first %}
+    <p>{{ message }}</p>
+  {% endif %}
+{% endfor %}
+
+      <button type="button" class="btn btn-primary mt-2" data-bs-dismiss="modal">OK</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  document.addEventListener("DOMContentLoaded", function () {
+    const modal = new bootstrap.Modal(document.getElementById("successModal"));
+    modal.show();
+  });
+</script>
+{% endif %}
+
+
+
     
 {% endblock %}

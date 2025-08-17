@@ -1,0 +1,19 @@
+{% if slots %}
+  <p><strong>Slots for {{ date }}</strong></p>
+  <ul>
+    {% for s in slots %}
+      <li>
+        {{ s.start|date:"g:i A" }} – {{ s.end|date:"g:i A" }} (cap {{ s.capacity }})
+        <form style="display:inline" hx-post="{% url 'portal_delete_slot' biz.slug %}"
+              hx-target="#slots" hx-swap="innerHTML"
+              hx-include="#controls">
+          <input type="hidden" name="start_time" value="{{ s.start|date:'H:i' }}">
+          <input type="hidden" name="end_time" value="{{ s.end|date:'H:i' }}">
+          <button>Delete</button>
+        </form>
+      </li>
+    {% endfor %}
+  </ul>
+{% else %}
+  <p><em>No slots on this date.</em></p>
+{% endif %}

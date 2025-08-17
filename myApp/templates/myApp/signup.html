@@ -97,33 +97,7 @@ select.form-select {
                     <label for="password2" class="form-label">Confirm Password</label>
                     <input type="password" name="password2" class="form-control" id="password2" required>
                 </div>
-
-                <!-- Business Profile -->
-                <hr class="my-4">
-                <h5 class="fw-bold mb-3">Business Profile</h5>
-
-                <div class="mb-3">
-                    <label for="business_name" class="form-label">Business Name</label>
-                    <input type="text" name="business_name" class="form-control" id="business_name" required>
-                </div>
-
-                <div class="mb-3">
-                    <label for="industry" class="form-label">Industry</label>
-                    <select class="form-select w-100" name="industry" id="industry" required>
-                        <option value="">Select Industry</option>
-                        <option value="Rental">Rental</option>
-                        <option value="Ecommerce">Ecommerce</option>
-                        <option value="Healthcare">Healthcare</option>
-                        <option value="Other">Other</option>
-                    </select>
-                </div>
-                
-                <div class="mb-3">
-                    <label for="description" class="form-label d-block">Business Description</label>
-                    <textarea name="description" id="description" class="form-control w-100" rows="3" placeholder="Tell us about your business"></textarea>
-                </div>
-                
-                
+    
 
                 <div class="d-flex justify-content-between align-items-center mb-4">
                     <div class="form-check">
@@ -139,30 +113,6 @@ select.form-select {
     </div>
 </div>
 
-{% if request.session.show_welcome_modal %}
-<!-- Welcome Modal -->
-<div class="modal fade" id="welcomeModal" tabindex="-1" aria-labelledby="welcomeModalLabel" aria-hidden="true">
-  <div class="modal-dialog modal-dialog-centered">
-    <div class="modal-content p-4">
-      <div class="modal-header border-0">
-        <h5 class="modal-title fw-bold" id="welcomeModalLabel">🎉 Welcome to your Dashboard!</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-      </div>
-      <div class="modal-body">
-        <p class="mb-3">Thanks for signing up, {{ request.user.first_name }}. Your AI assistant is ready to be personalized!</p>
-        <a href="#" class="btn btn-primary w-100">Get Started</a>
-      </div>
-    </div>
-  </div>
-</div>
-
-<script>
-    window.addEventListener('load', function () {
-        const modal = new bootstrap.Modal(document.getElementById('welcomeModal'));
-        modal.show();
-    });
-</script>
-{% endif %}
 
 
 <script>

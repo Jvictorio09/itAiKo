@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="fil">
+<head>
+  <meta charset="utf-8" />
+  <title>{{ biz.name }} — Calendar</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.11/index.global.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.11/index.global.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.11/locales-all.global.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+  <style> body { font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; } </style>
+</head>
+
+<body class="bg-gray-50">
+<header class="sticky top-0 z-10 bg-white/80 backdrop-blur border-b border-gray-200">
+  <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="w-2 h-6 bg-indigo-600 rounded-full"></div>
+      <h1 class="text-lg font-semibold">{{ biz.name }} <span class="text-gray-400">/ Calendar</span></h1>
+    </div>
+    <nav class="flex items-center gap-3">
+      <a class="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-xl border border-gray-300 text-sm font-semibold hover:bg-gray-50" href="{% url 'portal_dashboard' biz.slug %}">Dashboard</a>
+      <a class="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-xl border border-gray-300 text-sm font-semibold hover:bg-gray-50" href="{% url 'portal_logout' %}">Logout</a>
+    </nav>
+  </div>
+</header>
+
+<main class="max-w-7xl mx-auto px-4 py-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+  <section class="lg:col-span-8 space-y-4">
+    {% if not biz.manage_token %}
+      <div class="bg-rose-50 text-rose-900 border border-rose-200 rounded-xl p-3">
+        Wala pang Manage Token. Mag-set ng <b>manage_token</b> sa Business para gumana ang API calls.
+      </div>
+    {% endif %}
+
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-4">
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div>
+          <label class="text-sm font-medium text-gray-700">Resource / Unit</label>
+          <div class="flex gap-2">
+            <select id="resourceSelect" class="w-full border border-gray-300 rounded-xl px-3 py-2"></select>
+            <button id="manageResBtn" type="button" title="Manage Units"
+                    class="inline-flex items-center justify-center px-3 py-2 rounded-xl border border-gray-300 text-sm font-semibold hover:bg-gray-50">
+              +
+            </button>
+          </div>
+        </div>
+        <div>
+          <label class="text-sm font-medium text-gray-700">Timezone</label>
+          <div class="w-full border border-gray-300 rounded-xl px-3 py-2 bg-gray-50">{{ biz.timezone }}</div>
+        </div>
+        <div class="flex items-end">
+          <button id="todayBtn" type="button" class="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-xl border border-gray-300 text-sm font-semibold hover:bg-gray-50 w-full">Ngayon</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-3">
+      <div id="calendar"></div>
+    </div>
+  </section>
+
+  <aside class="lg:col-span-4 space-y-4">
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-4">
+      <h2 class="text-base font-semibold">Paano gumana</h2>
+      <ul class="text-sm text-gray-600 list-disc ml-4 mt-2 space-y-1">
+        <li><b>Drag</b> sa calendar para pumili ng oras, tapos <b>Book</b>.</li>
+        <li>I-click ang booking para <b>i-cancel</b>.</li>
+        <li>“All Units” view = combined schedule ng lahat ng active units.</li>
+      </ul>
+    </div>
+  </aside>
+</main>
+
+<!-- Booking modal -->
+<div id="mask" class="fixed inset-0 hidden place-items-center bg-black/50 backdrop-blur-sm">
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-5 w-[92vw] max-w-[460px]">
+    <h3 class="text-base font-semibold mb-3">I-book ang oras</h3>
+    <form id="bookForm" class="space-y-3">
+      {% csrf_token %}
+      <div id="modalResWrap" class="hidden">
+        <label class="text-sm font-medium text-gray-700">Resource</label>
+        <select id="modalResourceSelect" class="w-full border border-gray-300 rounded-xl px-3 py-2"></select>
+      </div>
+      <div>
+        <label class="text-sm font-medium text-gray-700">Mula</label>
+        <input class="w-full border border-gray-300 rounded-xl px-3 py-2" type="datetime-local" name="start" required>
+      </div>
+      <div>
+        <label class="text-sm font-medium text-gray-700">Hanggang</label>
+        <input class="w-full border border-gray-300 rounded-xl px-3 py-2" type="datetime-local" name="end" required>
+      </div>
+      <div class="flex justify-end gap-2 pt-1">
+        <button type="button" id="cancelModal" class="inline-flex items-center justify-center px-3 py-2 rounded-xl border border-gray-300 text-sm font-semibold hover:bg-gray-50">Cancel</button>
+        <button class="inline-flex items-center justify-center px-3 py-2 rounded-xl border text-sm font-semibold bg-indigo-600 text-white border-indigo-600 hover:bg-indigo-700">Book</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Manage Resources modal (unchanged) -->
+<div id="maskRes" class="fixed inset-0 hidden place-items-center bg-black/50 backdrop-blur-sm">
+  <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-5 w-[96vw] max-w-[720px]">
+    <div class="flex items-center justify-between mb-3">
+      <h3 class="text-base font-semibold">Manage Units</h3>
+      <button id="closeRes" class="inline-flex items-center justify-center px-3 py-2 rounded-xl border border-gray-300 text-sm font-semibold hover:bg-gray-50">Close</button>
+    </div>
+
+    <form id="createResForm" class="grid grid-cols-1 sm:grid-cols-4 gap-3 mb-4">
+      {% csrf_token %}
+      <input name="name" placeholder="e.g., Mitsubishi Mirage" class="w-full border border-gray-300 rounded-xl px-3 py-2" required>
+      <input name="capacity" type="number" min="1" value="1" class="w-full border border-gray-300 rounded-xl px-3 py-2" required>
+      <label class="inline-flex items-center gap-2">
+        <input type="checkbox" name="is_active" checked class="h-4 w-4">
+        <span class="text-sm text-gray-700">Active</span>
+      </label>
+      <button class="inline-flex items-center justify-center px-3 py-2 rounded-xl border text-sm font-semibold bg-indigo-600 text-white border-indigo-600 hover:bg-indigo-700">Add</button>
+    </form>
+
+    <div id="resList" class="divide-y divide-gray-100"></div>
+  </div>
+</div>
+
+<script>
+  const SLUG = "{{ biz.slug }}";
+  const TOKEN = "{{ biz.manage_token|default:'' }}";
+  const API_BASE = `/api/${SLUG}`;
+  const RES_API  = `/portal/${SLUG}/resources/api`;
+
+  // CSRF for session APIs
+  function getCookie(name){ const m=document.cookie.match('(^|;)\\s*'+name+'\\s*=\\s*([^;]+)'); return m?m.pop():''; }
+  const CSRF = getCookie('csrftoken');
+
+  const resourceSelect = document.getElementById('resourceSelect');
+  const manageResBtn = document.getElementById('manageResBtn');
+  const todayBtn = document.getElementById('todayBtn');
+  const calendarEl = document.getElementById('calendar');
+
+  const mask = document.getElementById('mask');
+  const bookForm = document.getElementById('bookForm');
+  const cancelModal = document.getElementById('cancelModal');
+  const modalResWrap = document.getElementById('modalResWrap');
+  const modalResourceSelect = document.getElementById('modalResourceSelect');
+
+  const maskRes = document.getElementById('maskRes');
+  const closeRes = document.getElementById('closeRes');
+  const createResForm = document.getElementById('createResForm');
+  const resList = document.getElementById('resList');
+
+  let calendar;
+  let resourcesCache = []; // [{id,name,capacity,is_active}]
+
+  // ---- helpers
+  const pad = n => String(n).padStart(2,'0');
+  const toLocalInputValue = dLike => { const d=new Date(dLike); return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+  const ALL_VALUE = 'all';
+
+  function openModal(startISO, endISO){
+    mask.classList.remove('hidden');
+    bookForm.start.value = toLocalInputValue(startISO);
+    bookForm.end.value   = toLocalInputValue(endISO);
+
+    // If viewing "All", force resource choice in modal
+    if (resourceSelect.value === ALL_VALUE) {
+      modalResWrap.classList.remove('hidden');
+      modalResourceSelect.innerHTML = resourcesCache
+        .filter(r => r.is_active)
+        .map(r => `<option value="${r.id}">${r.name}</option>`)
+        .join('');
+    } else {
+      modalResWrap.classList.add('hidden');
+      modalResourceSelect.innerHTML = '';
+    }
+  }
+  const closeModal = () => mask.classList.add('hidden');
+
+  // ---- booking APIs
+  async function api_list_one(resourceId, fromISO, toISO){
+    const url = `${API_BASE}/resources/${resourceId}/bookings?from=${encodeURIComponent(fromISO)}&to=${encodeURIComponent(toISO)}&token=${TOKEN}`;
+    const r = await fetch(url, { headers: { "X-Manage-Token": TOKEN } });
+    if (!r.ok) throw new Error('Load error');
+    return r.json();
+  }
+  async function api_create(resourceId, startISO, endISO, status='confirmed'){
+    return fetch(`${API_BASE}/resources/${resourceId}/booking?token=${TOKEN}`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json','X-Manage-Token':TOKEN},
+      body: JSON.stringify({start:startISO, end:endISO, status})
+    });
+  }
+  async function api_delete(resourceId, bookingId){
+    return fetch(`${API_BASE}/resources/${resourceId}/booking/delete?token=${TOKEN}`, {
+      method:'DELETE',
+      headers:{'Content-Type':'application/json','X-Manage-Token':TOKEN},
+      body: JSON.stringify({id: bookingId})
+    });
+  }
+
+  // ---- resources (session APIs)
+  async function loadResources(){
+    const r = await fetch(RES_API, { headers: {"X-CSRFToken": CSRF} });
+    const data = await r.json(); // {resources:[...]}
+    resourcesCache = data.resources || [];
+    syncResourceSelect(resourcesCache);
+    renderResourceAdminList(resourcesCache);
+    if (!calendar) initCalendar(); else calendar.refetchEvents();
+  }
+
+  function syncResourceSelect(resources){
+    const active = resources.filter(r => r.is_active);
+    const prev = resourceSelect.value || ALL_VALUE;
+    resourceSelect.innerHTML =
+      `<option value="${ALL_VALUE}">All Units</option>` +
+      active.map(r => `<option value="${r.id}">${r.name}</option>`).join('');
+    // restore previous selection if still valid; else default to ALL
+    if ([ALL_VALUE, ...active.map(r=>String(r.id))].includes(prev)) {
+      resourceSelect.value = prev;
+    } else {
+      resourceSelect.value = active[0] ? String(active[0].id) : ALL_VALUE;
+    }
+  }
+
+  function renderResourceAdminList(resources){
+    resList.innerHTML = resources.map(r => `
+      <div class="py-3 grid grid-cols-1 sm:grid-cols-5 gap-2 items-center">
+        <input data-id="${r.id}" name="name" class="border border-gray-300 rounded-xl px-3 py-2" value="${r.name}">
+        <input data-id="${r.id}" name="capacity" type="number" min="1" class="border border-gray-300 rounded-xl px-3 py-2" value="${r.capacity}">
+        <label class="inline-flex items-center gap-2">
+          <input data-id="${r.id}" name="is_active" type="checkbox" ${r.is_active?'checked':''} class="h-4 w-4">
+          <span class="text-sm text-gray-700">Active</span>
+        </label>
+        <div class="sm:col-span-2 flex gap-2 justify-end">
+          <button data-action="save" data-id="${r.id}" class="px-3 py-2 rounded-xl border text-sm font-semibold bg-indigo-600 text-white border-indigo-600 hover:bg-indigo-700">Save</button>
+          <button data-action="delete" data-id="${r.id}" class="px-3 py-2 rounded-xl border border-gray-300 text-sm font-semibold hover:bg-gray-50 text-rose-600">Delete</button>
+        </div>
+      </div>
+    `).join('');
+
+    // bind row actions
+    resList.querySelectorAll('button[data-action="save"]').forEach(btn=>{
+      btn.addEventListener('click', async ()=>{
+        const id = btn.dataset.id;
+        const name = resList.querySelector(`input[name="name"][data-id="${id}"]`).value.trim();
+        const capacity = parseInt(resList.querySelector(`input[name="capacity"][data-id="${id}"]`).value||'1',10);
+        const is_active = resList.querySelector(`input[name="is_active"][data-id="${id}"]`).checked;
+        const resp = await fetch(`${RES_API}/${id}`, {
+          method:'PUT',
+          headers:{'Content-Type':'application/json','X-CSRFToken':CSRF},
+          body: JSON.stringify({name, capacity, is_active})
+        });
+        if(!resp.ok) return alert('Save failed.');
+        await loadResources();
+      });
+    });
+    resList.querySelectorAll('button[data-action="delete"]').forEach(btn=>{
+      btn.addEventListener('click', async ()=>{
+        if(!confirm('Delete this resource?')) return;
+        const id = btn.dataset.id;
+        const resp = await fetch(`${RES_API}/${id}`, { method:'DELETE', headers:{'X-CSRFToken':CSRF} });
+        if(!resp.ok) return alert('Delete failed.');
+        await loadResources();
+      });
+    });
+  }
+
+  // ---- UI wiring
+  manageResBtn.addEventListener('click', async ()=>{
+    maskRes.classList.remove('hidden');
+    await loadResources();
+  });
+  closeRes.addEventListener('click', ()=> maskRes.classList.add('hidden'));
+  maskRes.addEventListener('click', e=> { if(e.target===maskRes) maskRes.classList.add('hidden'); });
+
+  createResForm.addEventListener('submit', async e=>{
+    e.preventDefault();
+    const fd = new FormData(createResForm);
+    const payload = {
+      name: (fd.get('name')||'').trim(),
+      capacity: parseInt(fd.get('capacity')||'1',10),
+      is_active: !!fd.get('is_active')
+    };
+    const resp = await fetch(RES_API, {
+      method:'POST',
+      headers:{'Content-Type':'application/json','X-CSRFToken':CSRF},
+      body: JSON.stringify(payload)
+    });
+    if(!resp.ok){ alert('Add failed.'); return; }
+    createResForm.reset(); createResForm.capacity.value=1; createResForm.is_active.checked=true;
+    await loadResources();
+  });
+
+  // ---- Calendar
+  function initCalendar(){
+    calendar = new FullCalendar.Calendar(calendarEl, {
+      locale:'fil',
+      height:'auto',
+      headerToolbar:{ left:'prev,next today', center:'title', right:'dayGridMonth,timeGridWeek,timeGridDay' },
+      buttonText:{ today:'Ngayon', month:'Buwan', week:'Linggo', day:'Araw' },
+      initialView:'timeGridWeek',
+      selectable:true,
+      selectMirror:true,
+      nowIndicator:true,
+
+      select: info => openModal(info.start.toISOString(), info.end.toISOString()),
+
+      eventClick: async info => {
+        const rid = info.event.extendedProps.resource_id;
+        const id  = info.event.id;
+        if (!rid) return alert('Missing resource id.');
+        if (confirm('I-cancel ang booking na ito?')) {
+          const resp = await api_delete(rid, id);
+          if (!resp.ok) { alert('Di ma-cancel.'); return; }
+          calendar.refetchEvents();
+        }
+      },
+
+      events: async (fetchInfo, success, failure) => {
+        try {
+          const startISO = fetchInfo.start.toISOString();
+          const endISO   = fetchInfo.end.toISOString();
+
+          // ALL view → merge bookings from each active resource
+          if (resourceSelect.value === ALL_VALUE) {
+            const active = resourcesCache.filter(r => r.is_active);
+            const results = await Promise.all(
+              active.map(r => api_list_one(r.id, startISO, endISO).then(d => ({rid:r.id, rname:r.name, data:d})))
+            );
+            const evs = results.flatMap(({rid, rname, data}) =>
+              (data.bookings||[]).map(b => ({
+                id: String(b.id),
+                title: `${rname}`,
+                start: b.start,
+                end: b.end,
+                backgroundColor: '#E0E7FF', // per-resource could be colored if you like
+                borderColor: '#A5B4FC',
+                textColor: '#1E3A8A',
+                extendedProps: { resource_id: rid }
+              }))
+            );
+            success(evs);
+            return;
+          }
+
+          // Single resource
+          const rid = resourceSelect.value;
+          if (!rid) { success([]); return; }
+          const data = await api_list_one(rid, startISO, endISO);
+          const evs = (data.bookings||[]).map(b => ({
+            id: String(b.id),
+            title: 'Booked',
+            start: b.start,
+            end: b.end,
+            backgroundColor: '#FEE2E2',
+            borderColor: '#FCA5A5',
+            textColor: '#991B1B',
+            extendedProps: { resource_id: parseInt(rid,10) }
+          }));
+          success(evs);
+        } catch(e){ console.error(e); failure(e); }
+      },
+    });
+
+    calendar.render();
+    todayBtn.addEventListener('click', ()=> calendar.today());
+    resourceSelect.addEventListener('change', ()=> calendar.refetchEvents());
+  }
+
+  // ---- boot
+  (async function boot(){ await loadResources(); })();
+
+  // booking modal handlers
+  cancelModal.addEventListener('click', ()=> closeModal());
+  mask.addEventListener('click', e=> { if(e.target===mask) closeModal(); });
+
+  // submit booking
+  bookForm.addEventListener('submit', async e=>{
+    e.preventDefault();
+    const startISO = new Date(bookForm.start.value).toISOString();
+    const endISO   = new Date(bookForm.end.value).toISOString();
+
+    // decide which resource to book
+    let rid = resourceSelect.value;
+    if (rid === ALL_VALUE) {
+      rid = modalResourceSelect.value;
+      if (!rid) return alert('Please select a resource.');
+    }
+
+    const resp = await api_create(rid, startISO, endISO);
+    if (resp.status === 409) {
+      alert('May naka-book na sa oras na ’yan (conflict).');
+    } else if (!resp.ok) {
+      const t = await resp.text(); alert('Di ma-save ang booking.\n' + t);
+    } else {
+      closeModal();
+      calendar.refetchEvents();
+    }
+  });
+</script>
+</body>
+</html>
