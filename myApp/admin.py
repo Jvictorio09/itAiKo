@@ -57,6 +57,11 @@ class BusinessAdmin(admin.ModelAdmin):
                 "Click the admin action “Generate manage token” to create one."
             ),
         }),
+        ("Booking Flow", {
+            "fields": ("booking_schema",),
+            "description": "Define required fields per booking (JSON array, e.g. ['date','time','service_type'])",
+        }),
+
         ("Timestamps", {"fields": ("created_at", "updated_at")}),
     )
 

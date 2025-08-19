@@ -122,14 +122,7 @@ def _ai_reply(biz: Business, user_msg: str) -> str:
 def _avail_ctx_key(biz: Business, sid: str) -> str:
     return f"mbot:ctx:{biz.slug}:{sid}:avail"
 
-def _set_avail_ctx(biz: Business, sid: str, minutes: int = 10):
-    cache.set(_avail_ctx_key(biz, sid), True, minutes * 60)
 
-def _has_avail_ctx(biz: Business, sid: str) -> bool:
-    return bool(cache.get(_avail_ctx_key(biz, sid)))
-
-def _clear_avail_ctx(biz: Business, sid: str):
-    cache.delete(_avail_ctx_key(biz, sid))
 
 
 import re
@@ -349,102 +342,104 @@ def _round_up_15(dtobj):
     base = dtobj.replace(second=0, microsecond=0)
     return base if minutes == 0 else base + timedelta(minutes=minutes)
 
+from django.core.cache import cache
+
+def _field_prompt(field):
+    prompts = {
+        "date": "Kailan po ang booking ninyo? (hal. Aug 21 o bukas)",
+        "time": "Anong oras po ang gusto ninyo?",
+        "destination": "Saan po ang pupuntahan?",
+        "service_type": "Anong service po ang kailangan (e.g., haircut, manicure, car rental)?",
+        "stylist": "May preferred stylist po ba?",
+        "guests": "Ilang tao po ang kasama?",
+    }
+    return prompts.get(field, f"Could you provide {field}?")
+
+
+import re
+from datetime import datetime
+
+def _parse_booking_info(text, schema):
+    info = {}
+    lower = text.lower()
+
+    if "date" in schema:
+        if "bukas" in lower:
+            info["date"] = (datetime.today() + timedelta(days=1)).date().isoformat()
+        elif re.search(r"\baug(?:ust)?\s?\d{1,2}\b", lower):
+            info["date"] = re.search(r"(aug(?:ust)?\s?\d{1,2})", lower).group(1)
+
+    if "time" in schema:
+        if "umaga" in lower:
+            info["time"] = "09:00"
+        elif "hapon" in lower:
+            info["time"] = "15:00"
+        elif match := re.search(r"(\d{1,2}(:\d{2})?\s?(am|pm))", lower):
+            info["time"] = match.group(1)
+
+    if "destination" in schema and any(w in lower for w in ["tagaytay", "qc", "makati"]):
+        info["destination"] = [w for w in ["tagaytay","qc","makati"] if w in lower][0]
+
+    if "service_type" in schema and any(w in lower for w in ["haircut","rent","catering","event"]):
+        info["service_type"] = [w for w in ["haircut","rent","catering","event"] if w in lower][0]
+
+    return info
+
+def _check_internal_availability(biz, ctx):
+    # Example: fetch slots from OpeningRule for ctx["date"] and ctx["time"]
+    slots = []
+    # TODO: implement properly
+    return slots
+
+
+def _ctx_key(sender_id):
+    return f"ctx:{sender_id}"
+
+def get_context(sender_id):
+    return cache.get(_ctx_key(sender_id), {})
+
+def set_context(sender_id, ctx):
+    cache.set(_ctx_key(sender_id), ctx, timeout=3600)  # 1 hr
+
+def clear_context(sender_id):
+    cache.delete(_ctx_key(sender_id))
 
 from .availability_utils import free_slots_for_day, is_range_free
 import datetime as dt
 
-def _availability_reply(biz: Business, user_text: str, sender_id: str | None = None) -> str | None:
+def _availability_reply(biz, sender_id, user_msg):
     """
-    Return a short Taglish availability reply string,
-    or None if this message is not about availability at all.
+    Slot-filling AI for availability requests.
     """
-    # Decide if this message should go through availability path
-    if not _wants_availability(biz, user_text, sender_id):
-        return None
+    ctx = get_context(sender_id)
+    schema = biz.booking_schema or ["date", "time"]  # fallback for legacy businesses
 
-    cfg = biz.availability_config or {}
-    followups = cfg.get("availability_followups") or [
-        "For when po ang booking (date & time)?",
-    ]
+    # Step 1: Try to parse new info from user message
+    parsed = _parse_booking_info(user_msg, schema)
+    ctx.update(parsed)
 
-    # Parse date/time
-    date = _parse_date_only(user_text, biz)
-    times = _parse_times(user_text)
+    # Step 2: Check which fields are missing
+    missing = [f for f in schema if f not in ctx]
 
-    # 0) Nothing usable → ask follow-ups, set short-lived context
-    if not date and not times:
-        _set_avail_ctx(biz, sender_id or "anon")
-        if len(followups) == 1:
-            return followups[0]
-        return f"Para ma-check ko agad, paki-share po: " + " • ".join(followups[:2])
+    if missing:
+        # Ask for the next missing slot
+        next_field = missing[0]
+        prompt = _field_prompt(next_field)
+        set_context(sender_id, ctx)
+        return prompt
 
-    # 1) Time only → ask for the date specifically (don’t guess today)
-    if not date and times:
-        _set_avail_ctx(biz, sender_id or "anon")
-        # Show the time they gave to feel responsive
-        (h, m, ampm) = times[0]
-        if ampm:
-            h, m = _to_24h(h, m, ampm)
-        hh = (h % 12) or 12
-        ap = "AM" if h < 12 else "PM"
-        return f"Noted: {hh}:{m:02d} {ap}. Anong date po?"
+    # Step 3: All fields filled → check availability
+    clear_context(sender_id)
 
-    # 2) Date only → list first few free times per active resource
-# 2) Date only → list first few free times per active resource
-    if date and not times:
-        tz = _tz(biz)
-        resources = list(biz.resources.filter(is_active=True))
-        lines = []
+    # For car rental/salon/etc: plug into your Resource + OpeningRule
+    available = _check_internal_availability(biz, ctx)
 
-        for r in resources:
-            slots = free_slots_for_day(biz, r, date, duration_minutes=60)
-            if not slots:
-                # skip fully booked/closed resources (don’t show them)
-                continue
+    if available:
+        slots = "\n".join(f"• {s}" for s in available[:5])
+        return f"Availability for {ctx['date']}:\n{slots}\n\nWould you like me to book this for you?"
+    else:
+        return "Sorry, fully booked for that slot. Want me to suggest another time?"
 
-            human = []
-            for s in slots[:4]:
-                st = dt.datetime.fromisoformat(s["start"]).astimezone(tz)
-                human.append(st.strftime("%I:%M %p").lstrip("0"))
-            lines.append(f"• {r.name}: {', '.join(human)} …")
-
-        _set_avail_ctx(biz, sender_id or "anon")  # keep context until they pick a time
-
-        if lines:
-            return f"Availability for {date:%b %d}:\n" + "\n".join(lines) + "\n\nMay preferred time ka ba?"
-        else:
-            # only say 'fully booked' if literally no unit has any free slot
-            return f"Mukhang fully booked tayo sa {date:%b %d}. Gusto mo bang i-check ko ang next available day?"
-
-
-    # 3) Date + time(s) → check concrete window (default 1h if single time)
-    start_end = _parse_when(user_text, biz)
-    if start_end and isinstance(start_end[0], dt.datetime) and isinstance(start_end[1], dt.datetime):
-        start, end = start_end
-        ok_list = []
-        for r in biz.resources.filter(is_active=True):
-            if is_range_free(biz, r, start, end):
-                ok_list.append(r.name)
-        # clear context after a definite check
-        if sender_id:
-            _clear_avail_ctx(biz, sender_id)
-
-        if ok_list:
-            span = f"{start.strftime('%b %d %I:%M %p').lstrip('0')}–{end.strftime('%I:%M %p').lstrip('0')}"
-            tops = ", ".join(ok_list[:3])
-            more = " (and more)" if len(ok_list) > 3 else ""
-            return f"Available sa {span}. Free: {tops}{more}. I-hold ko ba?"
-        else:
-            # find nearest alternative (optional mini-helper)
-            alt = _nearest_alt_slot(biz, start.date(), minutes=60)
-            if alt:
-                astart = dt.datetime.fromisoformat(alt["start"]).astimezone(_tz(biz))
-                return f"Booked na ’yung oras na ’yan. Ok po ba {astart.strftime('%b %d %I:%M %p').lstrip('0')}?"
-            return "Mukhang occupied ang oras na ’yan. May iba ka bang oras?"
-
-    # Fallback (shouldn’t hit)
-    _set_avail_ctx(biz, sender_id or "anon")
-    return f"For when po ang booking (date & time)?"
 
 
 def _nearest_alt_slot(biz: Business, date: dt.date, minutes: int = 60):

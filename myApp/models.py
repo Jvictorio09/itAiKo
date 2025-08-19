@@ -49,6 +49,12 @@ class Business(models.Model):
         help_text="Provider-specific config (e.g. calendar IDs, API creds)"
     )
 
+    booking_schema = models.JSONField(
+    default=list, blank=True,
+    help_text="List of required fields: e.g. ['date', 'time', 'service_type', 'stylist']"
+    )
+
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
