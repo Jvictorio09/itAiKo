@@ -300,73 +300,7 @@ def _parse_when(text: str, biz):
 
     return (None, None)
 
-# --- Availability intent detection (strong + weak with guards) ---
-BOOKING_STRONG_RE = re.compile(
-    r"""
-    \b(
-        book(?:ing)?|                # book, booking
-        pa[-\s]*book|magpa[-\s]*book|pabook|magpabook|
-        reserve(?:rs?|ation)?|       # reserve, reservation
-        pa[-\s]*reserve|magpa[-\s]*reserve|pareserve|magpareserve|
-        sched|sked|schedule|iskedyul|isched|pa[-\s]*sched|magpa[-\s]*sched|
-        slot(?:s)?|availability|available|vacant|bakante|
-        open(?:\s*pa)?               # open / open pa
-    )\b
-    """,
-    re.I | re.X,
-)
 
-RENT_STRONG_RE = re.compile(
-    r"""
-    \b(
-        rent(?:al)?|renta|rental|arkila|arkilahin|
-        hire|with\s*driver|self[-\s]*drive|pickup|pick[-\s]*up|drop[-\s]*off
-    )\b
-    """,
-    re.I | re.X,
-)
-
-# Weak cues (require date/time or "now" context to avoid false positives):
-WEAK_RE = re.compile(r"\b(pwede|puwede|kaya|libre|free|later|mamaya)\b", re.I)
-
-# Expand "now" words (keep your old NOW_WORDS_RE if you have it)
-NOW_WORDS_RE = re.compile(
-    r"\b(now(\s*na)?|right\s*now|ngayon(\s*na)?|mamaya\s*na)\b",
-    re.I
-)
-
-def _wants_availability(biz: Business, text: str, sender_id: str | None = None) -> bool:
-    t = (text or "").lower().strip()
-    if not t:
-        return False
-
-    # 1) Strong cues instantly trigger
-    if BOOKING_STRONG_RE.search(t) or RENT_STRONG_RE.search(t):
-        return True
-
-    # 2) "Now" words instantly trigger
-    if NOW_WORDS_RE.search(t):
-        return True
-
-    # 3) Weak cues only if there is a date/time signal
-    #    (prevents "is this free?" from triggering)
-    try:
-        has_date = bool(_parse_date_only(text, biz))
-    except Exception:
-        has_date = False
-    try:
-        has_time = bool(_parse_times(text))
-    except Exception:
-        has_time = False
-
-    if WEAK_RE.search(t) and (has_date or has_time):
-        return True
-
-    # 4) Pure date/time messages like "Aug 21 2pm" should still trigger
-    if has_date or has_time:
-        return True
-
-    return False
 
 
 
@@ -375,8 +309,7 @@ def _wants_availability(biz: Business, text: str, sender_id: str | None = None) 
 # =========================================================
 
 def _availability_reply(biz: Business, text: str, sender_id: str | None = None) -> str | None:
-    if not _wants_availability(biz, text, sender_id):
-        return None
+    
 
     desired_minutes = _parse_duration_minutes(text) or 60
     date_only = _parse_date_only(text, biz)
@@ -490,12 +423,256 @@ def _availability_reply(biz: Business, text: str, sender_id: str | None = None) 
     _set_ctx(biz, sender_id or "anon")
     return "For when po ang booking (date at oras)?"
 
+# --- AI-first NLU & booking router (drop-in) ---------------------
+import json as _json
+from datetime import datetime as _dt, timedelta as _td
+from django.utils import timezone as _tz
+
+# 1) NLU: ask the model to return strict JSON (no keyword lists)
+def _ai_understand(biz: Business, user_msg: str) -> dict:
+    """
+    Returns a dict like:
+    {
+      "intent": "availability|booking|greeting|smalltalk|faq|other",
+      "date": "YYYY-MM-DD" | null,
+      "start_time": "HH:MM" | null,   # 24h, local to biz
+      "duration_minutes": int | null,
+      "service_type": str | null,     # e.g. "car_rental", "haircut"
+      "resource_name": str | null,
+      "notes": str | null,
+      "confidence": 0.0-1.0
+    }
+    """
+    # Guard: if no OpenAI key, safely fallback to simple other
+    if not OPENAI_API_KEY:
+        return {"intent": "other", "date": None, "start_time": None, "duration_minutes": None,
+                "service_type": None, "resource_name": None, "notes": None, "confidence": 0.0}
+
+    system = (
+        _compose_prompt(biz)
+        + "\n\nYou are an NLU parser. Extract user intent and entities for booking/availability across any business type. "
+          "Return ONLY a single JSON object. Do not include code fences or commentary."
+    )
+
+    # Prefer JSON mode if supported; otherwise we post-process
+    try:
+        r = client.chat.completions.create(
+            model=biz.model_name,
+            temperature=0.1,
+            max_tokens=min(512, int(biz.max_tokens or 512)),
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user",
+                 "content": (
+                    "Extract intent and fields.\n"
+                    "Schema:\n"
+                    "{"
+                    "\"intent\": \"availability|booking|greeting|smalltalk|faq|other\","
+                    "\"date\": \"YYYY-MM-DD|null\","
+                    "\"start_time\": \"HH:MM|null\","
+                    "\"duration_minutes\": \"int|null\","
+                    "\"service_type\": \"string|null\","
+                    "\"resource_name\": \"string|null\","
+                    "\"notes\": \"string|null\","
+                    "\"confidence\": \"0.0-1.0\""
+                    "}\n\n"
+                    f"User: {user_msg}"
+                 )},
+            ],
+        )
+        raw = (r.choices[0].message.content or "{}").strip()
+        parsed = _json.loads(raw)
+    except Exception:
+        log.exception("NLU error; fallback to 'other'")
+        parsed = {"intent": "other", "date": None, "start_time": None,
+                  "duration_minutes": None, "service_type": None,
+                  "resource_name": None, "notes": None, "confidence": 0.0}
+
+    # Normalize types
+    parsed.setdefault("intent", "other")
+    parsed["date"] = parsed.get("date") or None
+    parsed["start_time"] = parsed.get("start_time") or None
+    try:
+        dm = parsed.get("duration_minutes")
+        parsed["duration_minutes"] = int(dm) if dm not in (None, "", "null") else None
+    except Exception:
+        parsed["duration_minutes"] = None
+    parsed["service_type"] = (parsed.get("service_type") or None)
+    parsed["resource_name"] = (parsed.get("resource_name") or None)
+    parsed["notes"] = (parsed.get("notes") or None)
+    try:
+        parsed["confidence"] = float(parsed.get("confidence") or 0.0)
+    except Exception:
+        parsed["confidence"] = 0.0
+    return parsed
+
+# 2) Per-sender context (merge, don’t reset)
+def _ctx_key(sender_id: str) -> str:
+    return f"ctx:{sender_id}"
+
+def _get_ctx(sender_id: str) -> dict:
+    return cache.get(_ctx_key(sender_id), {})
+
+def _set_ctx(sender_id: str, ctx: dict):
+    cache.set(_ctx_key(sender_id), ctx, 3600)
+
+def _clear_ctx(sender_id: str):
+    cache.delete(_ctx_key(sender_id))
+
+def _merge_ctx(ctx: dict, parsed: dict) -> dict:
+    # Only overwrite fields user actually provided
+    for k in ["date", "start_time", "duration_minutes", "service_type", "resource_name", "notes"]:
+        v = parsed.get(k, None)
+        if v not in (None, "", "null"):
+            ctx[k] = v
+    return ctx
+
+# 3) Resolve fuzzy time like “today/later”
+def _biz_tzinfo(biz: Business):
+    from zoneinfo import ZoneInfo
+    try:
+        return ZoneInfo(biz.timezone) if biz.timezone else _tz.get_current_timezone()
+    except Exception:
+        return _tz.get_current_timezone()
+
+def _round_up_15(dtobj):
+    minutes = (15 - (dtobj.minute % 15)) % 15
+    base = dtobj.replace(second=0, microsecond=0)
+    return base if minutes == 0 else base + _td(minutes=minutes)
+
+def _resolve_window(biz: Business, ctx: dict) -> tuple[datetime|None, datetime|None]:
+    """
+    Turn (date, start_time, duration_minutes) into aware start/end.
+    If missing, fill reasonable defaults based on lead time.
+    """
+    tz = _biz_tzinfo(biz)
+    now_local = _tz.now().astimezone(tz)
+    cfg = getattr(biz, "availability_config", {}) or {}
+    lead = int(cfg.get("lead_minutes", 0))
+
+    # date
+    date_str = ctx.get("date")
+    if date_str in (None, "", "null"):
+        # If the user said "later/today" the NLU should set date=today. If not, assume today.
+        date_obj = _tz.localdate()
+    else:
+        try:
+            date_obj = _dt.strptime(date_str, "%Y-%m-%d").date()
+        except Exception:
+            date_obj = _tz.localdate()
+
+    # start_time
+    st_str = ctx.get("start_time")
+    if st_str:
+        try:
+            hh, mm = [int(x) for x in st_str.split(":")[:2]]
+            start_naive = _dt.combine(date_obj, dtime(hh, mm))
+        except Exception:
+            start_naive = _dt.combine(date_obj, dtime(0, 0))
+    else:
+        # If none, choose the earliest valid start after lead time (rounded)
+        min_start = now_local + _td(minutes=lead)
+        if date_obj > _tz.localdate():
+            start_naive = _dt.combine(date_obj, dtime(9, 0))  # reasonable default next-day
+        else:
+            start_naive = _round_up_15(min_start).replace(tzinfo=None)
+
+    start = timezone.make_aware(start_naive, tz)
+
+    # duration
+    dur = int(ctx.get("duration_minutes") or 60)
+    end = start + _td(minutes=dur)
+    return start, end
+
+# 4) Check all active resources; pick best option(s)
+def _find_free_window_any_resource(biz: Business, start: datetime, end: datetime):
+    # Return (resource, start, end) if any active resource is free
+    for r in biz.resources.filter(is_active=True).order_by("name"):
+        if is_range_free(biz, r, start, end):
+            return r, start, end
+    return None, None, None
+
+def _suggest_alternatives(biz: Business, start: datetime, end: datetime, scans=6, step_minutes=30):
+    # Try +/- steps after requested start
+    alts = []
+    forward = start
+    for i in range(scans):
+        forward = forward + _td(minutes=step_minutes)
+        r, s, e = _find_free_window_any_resource(biz, forward, forward + (end - start))
+        if r:
+            alts.append((r, s, e))
+            break
+    backward = start
+    for i in range(scans):
+        backward = backward - _td(minutes=step_minutes)
+        if backward.date() < _tz.localdate() - _td(days=1):
+            break
+        r, s, e = _find_free_window_any_resource(biz, backward, backward + (end - start))
+        if r:
+            alts.append((r, s, e))
+            break
+    return alts
+
+# 5) Booking-mode brain
+def _booking_router(biz: Business, sender_id: str, user_msg: str) -> str | None:
+    """
+    Returns a human message if we handled booking/availability,
+    or None to let general AI handle smalltalk/faq/other.
+    """
+    parsed = _ai_understand(biz, user_msg)
+    intent = parsed.get("intent", "other")
+
+    # Only enter booking flow if the model thinks so
+    if intent not in {"availability", "booking", "reservation"} and parsed.get("date") is None and parsed.get("start_time") is None:
+        return None  # let GPT smalltalk/faq handle it
+
+    # Merge with previous context
+    ctx = _get_ctx(sender_id)
+    ctx = _merge_ctx(ctx, parsed)
+
+    # If key fields missing, ask one question at a time (business-agnostic)
+    schema = getattr(biz, "booking_schema", None) or ["date", "start_time", "duration_minutes"]
+    for f in schema:
+        if ctx.get(f) in (None, "", "null"):
+            prompt_map = {
+                "date": "Kailan po ang booking ninyo? (hal. 2025-08-21 o 'bukas')",
+                "start_time": "Anong oras po ang start? (hal. 20:00 o 8:00 PM)",
+                "duration_minutes": "Gaano katagal po? (hal. 60, 180, 720/12 hours)"
+            }
+            _set_ctx(sender_id, ctx)
+            return prompt_map.get(f, f"Could you provide {f}?")
+
+    # We have enough to check availability
+    start, end = _resolve_window(biz, ctx)
+
+    # Validate across all active resources
+    res, s, e = _find_free_window_any_resource(biz, start, end)
+    if res:
+        _clear_ctx(sender_id)  # we’re done (or you can keep to confirm later)
+        s_local = s.astimezone(_biz_tzinfo(biz)).strftime("%b %d %I:%M %p")
+        e_local = e.astimezone(_biz_tzinfo(biz)).strftime("%I:%M %p")
+        return f"Available: {s_local} – {e_local}. Free: {res.name}. I-hold ko ba?"
+
+    # No exact match → suggest alternatives (never say fully booked prematurely)
+    alts = _suggest_alternatives(biz, start, end)
+    if alts:
+        lines = []
+        for (r2, s2, e2) in alts[:2]:
+            s2l = s2.astimezone(_biz_tzinfo(biz)).strftime("%b %d %I:%M %p")
+            e2l = e2.astimezone(_biz_tzinfo(biz)).strftime("%I:%M %p")
+            lines.append(f"• {s2l} – {e2l} ({r2.name})")
+        _set_ctx(sender_id, ctx)  # keep context so user can pick
+        return "Walang exact na tugma sa hiling ninyo, pero pwede ang:\n" + "\n".join(lines) + "\n\nPili po kayo?"
+
+    _set_ctx(sender_id, ctx)
+    return "Walang continuous window for that request. Gusto mo bang mag-suggest ako ng ibang oras o ibang araw?"
+# --- end AI-first router -----------------------------------------
 
 
 # =========================================================
 # Webhook
 # =========================================================
-
 @csrf_exempt
 def webhook(request, slug):
     """
@@ -528,6 +705,7 @@ def webhook(request, slug):
         except json.JSONDecodeError:
             return HttpResponse("Bad JSON", status=400)
 
+        page_token = getattr(biz, "fb_page_access_token", "")
         for entry in payload.get("entry", []):
             for event in entry.get("messaging", []):
                 msg = event.get("message", {}) or {}
@@ -547,23 +725,31 @@ def webhook(request, slug):
                 # Strip hashtag commands like "#manual hi"
                 if text.startswith("#"):
                     parts = text.split(maxsplit=1)
-                    text = parts[1] if len(parts) > 1 else ""
+                    text = parts[1].strip() if len(parts) > 1 else ""
                     if not text:
                         continue
 
-                _typing(biz.fb_page_access_token, sender_id, True)
-
-                # Availability-first
-                avail_text = _availability_reply(biz, text, sender_id)
-                if avail_text is not None:
-                    _send_text(biz.fb_page_access_token, sender_id, avail_text)
-                    _typing(biz.fb_page_access_token, sender_id, False)
+                # If the page token isn't configured, fail gracefully
+                if not page_token:
+                    log.error("FB page token missing for biz %s", biz.slug)
                     continue
 
-                # General AI reply (respects your prompt stack)
-                reply = _ai_reply(biz, text)
-                _send_text(biz.fb_page_access_token, sender_id, reply)
-                _typing(biz.fb_page_access_token, sender_id, False)
+                _typing(page_token, sender_id, True)
+                try:
+                    # Availability-first: only handle if the helper thinks it's a booking ask
+                    # (Ensure _availability_reply returns None for non-booking messages.)
+                    avail_text = _availability_reply(biz, text, sender_id)
+                    if avail_text is not None:
+                        _send_text(page_token, sender_id, avail_text)
+                    else:
+                        # General AI reply (respects your prompt stack)
+                        reply = _ai_reply(biz, text)
+                        _send_text(page_token, sender_id, reply)
+                except Exception:
+                    log.exception("Error handling message")
+                    _send_text(page_token, sender_id, "Oops, nagka-issue sandali. Pakiulit po.")
+                finally:
+                    _typing(page_token, sender_id, False)
 
         return HttpResponse("ok", status=200)
 
