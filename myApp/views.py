@@ -1,53 +1,50 @@
 # myApp/views.py
 from __future__ import annotations
 
-import hmac, hashlib, json, logging, time, requests, re
+import hmac, hashlib, json, logging, time as _time, requests, re
 from datetime import datetime, timedelta, time as dtime
 from zoneinfo import ZoneInfo
 
-from django import forms
 from django.conf import settings
+from django.http import HttpResponse, JsonResponse, HttpResponseBadRequest, HttpResponseForbidden
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_http_methods
+from django.core.cache import cache
+from django.shortcuts import get_object_or_404, render, redirect
+from django.utils import timezone
+from django.utils.dateparse import parse_datetime
+from django.urls import reverse
 from django.contrib import messages
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.decorators import login_required
-from django.core.cache import cache
-from django.http import (
-    HttpResponse, JsonResponse, HttpResponseBadRequest, HttpResponseForbidden
-)
+from django import forms
 from django.middleware.csrf import get_token
-from django.shortcuts import render, redirect, get_object_or_404
-from django.urls import reverse
-from django.utils import timezone
-from django.utils.dateparse import parse_datetime
-from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_http_methods
 
-from .models import Business, BusinessMember, Resource, Booking, Snippet  # Snippet used in prompt
+from .models import Business, BusinessMember, Resource, Booking, Snippet  # ensure Snippet exists
 
-# Availability helpers (internal calendar)
+# Availability helpers (your updated utils)
 try:
-    from .availability_utils import free_slots_for_day, is_range_free
+    from .availability_utils import free_slots_for_day, is_range_free, nearest_free_slot
 except Exception:
     free_slots_for_day = None
     is_range_free = None
+    nearest_free_slot = None
 
-# ---- OpenAI client (only if you configured OPENAI_API_KEY) ----
-try:
-    from openai import OpenAI
-    _OPENAI_API_KEY = getattr(settings, "OPENAI_API_KEY", "")
-    _openai_client = OpenAI(api_key=_OPENAI_API_KEY) if _OPENAI_API_KEY else None
-except Exception:
-    _openai_client = None
+from openai import OpenAI
 
-log = logging.getLogger("myApp.webhook")
+log = logging.getLogger("messenger.webhook")
 
-# ---------------------------
-# Facebook Graph helpers
-# ---------------------------
 GRAPH_BASE = "https://graph.facebook.com/v20.0"
 GRAPH_MSGS = f"{GRAPH_BASE}/me/messages"
+OPENAI_API_KEY = getattr(settings, "OPENAI_API_KEY", "")
+client = OpenAI(api_key=OPENAI_API_KEY)
 
-def _fb_verify_sig(app_secret: str, body: bytes, header: str) -> bool:
+
+# =========================================================
+# Facebook helpers
+# =========================================================
+
+def _verify_sig(app_secret: str, body: bytes, header: str) -> bool:
     if not app_secret:
         log.warning("FB_APP_SECRET missing; skipping signature check.")
         return True
@@ -56,7 +53,7 @@ def _fb_verify_sig(app_secret: str, body: bytes, header: str) -> bool:
     expected = hmac.new(app_secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(header.split("=", 1)[1], expected)
 
-def _fb_send(page_token: str, payload: dict, tries: int = 2):
+def _send_graph(page_token: str, payload: dict, tries: int = 2):
     params = {"access_token": page_token}
     headers = {"Content-Type": "application/json"}
     for i in range(tries):
@@ -67,21 +64,22 @@ def _fb_send(page_token: str, payload: dict, tries: int = 2):
             log.error("Graph %s: %s", r.status_code, r.text)
         except requests.RequestException as e:
             log.warning("Graph error: %s", e)
-        time.sleep(0.4 * (i + 1))
+        _time.sleep(0.4 * (i + 1))
     return None
 
 def _typing(page_token: str, rid: str, on=True):
-    _fb_send(page_token, {
+    _send_graph(page_token, {
         "recipient": {"id": rid},
         "sender_action": "typing_on" if on else "typing_off"
     })
 
 def _send_text(page_token: str, rid: str, text: str):
-    _fb_send(page_token, {"recipient": {"id": rid}, "message": {"text": text[:2000]}})
+    _send_graph(page_token, {"recipient": {"id": rid}, "message": {"text": text[:2000]}})
 
-# ---------------------------
+
+# =========================================================
 # Prompt / GPT reply
-# ---------------------------
+# =========================================================
 
 _UNIVERSAL_PERSONA = (
     "You are a compassionate, friendly-but-professional Filipino customer assistant. "
@@ -92,24 +90,27 @@ _UNIVERSAL_PERSONA = (
 
 def _compose_prompt(biz: Business) -> str:
     parts = [_UNIVERSAL_PERSONA]
-    if biz.system_prompt:
+    if getattr(biz, "system_prompt", ""):
         parts.append(biz.system_prompt.strip())
-    if biz.business_context:
+    if getattr(biz, "business_context", ""):
         parts += ["\n### Business Context", biz.business_context.strip()]
-    # include snippets (rates, FAQs, policies, etc.)
-    for sn in biz.snippets.all():
-        label = (sn.title or sn.key).title()
-        parts += [f"\n### {label}", (sn.content or "").strip()]
-    if biz.blocked_keywords:
-        parts += [f"\n### Restricted\nNever discuss: {', '.join(biz.blocked_keywords)}."]
+    # Optional snippets, if model exists
+    if hasattr(biz, "snippets"):
+        for sn in biz.snippets.all():
+            label = (sn.title or sn.key or "Snippet").title()
+            parts += [f"\n### {label}", (sn.content or "").strip()]
+    # Guardrails / restricted topics
+    if getattr(biz, "blocked_keywords", None):
+        try:
+            blocked = ", ".join(biz.blocked_keywords)  # ArrayField/list expected
+        except Exception:
+            blocked = str(biz.blocked_keywords)
+        parts += [f"\n### Restricted\nNever discuss: {blocked}."]
     return "\n".join([p for p in parts if p])
 
 def _ai_reply(biz: Business, user_msg: str) -> str:
-    # If OpenAI isn’t configured, return an apologetic fallback
-    if not _openai_client:
-        return "Hi! I’m online pero walang AI credits configured. Pakimesage ulit po later. 🙏"
     try:
-        r = _openai_client.chat.completions.create(
+        r = client.chat.completions.create(
             model=biz.model_name,
             temperature=float(biz.temperature),
             max_tokens=int(biz.max_tokens),
@@ -123,34 +124,37 @@ def _ai_reply(biz: Business, user_msg: str) -> str:
         log.exception("OpenAI error")
         return "Sorry, nagka-issue sa system. Pakiulit po ang tanong."
 
-# ---------------------------
-# Availability: context + parsing + reply
-# ---------------------------
 
-# Context keys (per-sender, short-lived)
-def _avail_ctx_key(biz: Business, sid: str) -> str:
+# =========================================================
+# Availability intent + parsing
+# =========================================================
+
+# Per-sender lightweight ctx (just signals we're in a booking flow)
+def _ctx_key(biz: Business, sid: str) -> str:
     return f"mbot:ctx:{biz.slug}:{sid}:avail"
 
-def _has_avail_ctx(biz: Business, sid: str) -> bool:
-    return bool(cache.get(_avail_ctx_key(biz, sid)))
+def _get_ctx(biz: Business, sid: str) -> dict:
+    return cache.get(_ctx_key(biz, sid), {})
 
-def _set_avail_ctx(biz: Business, sid: str, minutes: int = 15):
-    cache.set(_avail_ctx_key(biz, sid), True, minutes * 60)
+def _set_ctx(biz: Business, sid: str, ctx: dict | None = None, minutes: int = 30):
+    cache.set(_ctx_key(biz, sid), (ctx or {"active": True}), minutes * 60)
 
-def _clear_avail_ctx(biz: Business, sid: str):
-    cache.delete(_avail_ctx_key(biz, sid))
+def _clear_ctx(biz: Business, sid: str):
+    cache.delete(_ctx_key(biz, sid))
 
-# timezone
+def _has_ctx(biz: Business, sid: str) -> bool:
+    return bool(cache.get(_ctx_key(biz, sid)))
+
 def _tz(biz: Business):
     try:
         return ZoneInfo(biz.timezone) if biz.timezone else timezone.get_current_timezone()
     except Exception:
         return timezone.get_current_timezone()
 
-# recognizer for "now"
+# recognizer for “now”
 NOW_WORDS_RE = re.compile(r"\b(now( na)?|right now|ngayon( na)?)\b", re.I)
 
-# Strict time regex: supports 2pm, 14:00, 2:30 PM, 2-4pm, 2 to 4 — ignores “18” inside “Aug 18”
+# Strict time regex (2pm, 14:00, 2:30 PM, 2-4pm, 2 to 4; ignores bare 18 in Aug 18)
 _TIME_RE = re.compile(r"(?<!\d)(?P<h>\d{1,2})(?::(?P<m>\d{2}))?\s*(?P<ampm>am|pm)?(?!\d)", re.I)
 
 def _to_24h(h: int, m: int, ampm: str):
@@ -180,7 +184,7 @@ def _parse_times(text: str):
             break
     return out
 
-def _parse_date_only(text: str, biz: Business):
+def _parse_date_only(text: str, biz) -> datetime.date | None:
     t = (text or "").lower()
     today = timezone.localdate()
     if "today" in t or "ngayon" in t:
@@ -197,7 +201,7 @@ def _parse_date_only(text: str, biz: Business):
         except ValueError:
             pass
 
-    # Mon 21 or August 21 (, 2025)
+    # Aug 21 (, 2025)
     m2 = re.search(r"\b([A-Za-z]{3,9})\s+(\d{1,2})(?:,\s*(\d{4}))?\b", text or "")
     if m2:
         try:
@@ -214,7 +218,13 @@ def _round_up_15(dtobj: datetime):
     base = dtobj.replace(second=0, microsecond=0)
     return base if minutes == 0 else base + timedelta(minutes=minutes)
 
-def _parse_when(text: str, biz: Business):
+def _parse_when(text: str, biz):
+    """
+    Return:
+      (date_only, None) if only date is found,
+      (start_dt, end_dt) if a concrete range is found (aware),
+      (None, None) if not enough info.
+    """
     date = _parse_date_only(text, biz)
     times = _parse_times(text)
 
@@ -230,15 +240,13 @@ def _parse_when(text: str, biz: Business):
 
     if date and times:
         tz = _tz(biz)
-
-        def _mk(d, hh, mm):
+        def _mk(d: datetime.date, hh: int, mm: int) -> datetime:
             naive = datetime.combine(d, dtime(hh, mm))
             return timezone.make_aware(naive, tz)
-
         if len(times) == 1:
-            h, m, ampm = times[0]
-            if ampm:
-                h, m = _to_24h(h, m, ampm)
+            h, m, a = times[0]
+            if a:
+                h, m = _to_24h(h, m, a)
             if not (0 <= h <= 23 and 0 <= m <= 59):
                 return (date, None)
             start = _mk(date, h, m)
@@ -260,17 +268,16 @@ def _parse_when(text: str, biz: Business):
 
     return (None, None)
 
-# Intent gate: soft, context-aware
 def _wants_availability(biz: Business, text: str, sender_id: str | None = None) -> bool:
     t = (text or "").lower()
     if NOW_WORDS_RE.search(t):
         return True
-    # Strong hints — minimal keyword use to prevent false positives on chit-chat
-    kw = ["available", "availability", "avail", "book", "booking", "reserve", "slot", "schedule",
-          "pwede", "kaya", "bakante", "open", "free"]
+    # Common keywords that imply booking intent (Taglish + EN)
+    kw = ["available", "availability", "avail", "book", "booking", "reserve",
+          "slot", "schedule", "pwede", "kaya", "bakante", "open", "free", "rent", "rental"]
     if any(k in t for k in kw):
         return True
-    if sender_id and _has_avail_ctx(biz, sender_id):
+    if sender_id and _has_ctx(biz, sender_id):
         return True
     try:
         if _parse_date_only(text, biz) or _parse_times(text):
@@ -279,168 +286,137 @@ def _wants_availability(biz: Business, text: str, sender_id: str | None = None) 
         pass
     return False
 
-# Friendly follow-ups per field
-def _field_prompt(field):
-    prompts = {
-        "date": "Kailan po ang booking ninyo? (hal. Aug 21 o bukas)",
-        "time": "Anong oras po ang gusto ninyo?",
-        "destination": "Saan po ang pupuntahan?",
-        "service_type": "Anong service po ang kailangan (hal. haircut, manicure, car rental)?",
-        "stylist": "May preferred stylist po ba?",
-        "guests": "Ilang tao po ang kasama?",
-    }
-    return prompts.get(field, f"Could you share your {field}?")
 
-# Super-light slot-filling for non-date fields (kept simple & safe)
-def _parse_booking_info(text: str, schema: list[str]) -> dict:
-    info, lower = {}, (text or "").lower()
+# =========================================================
+# Availability reply
+# =========================================================
 
-    if "date" in schema:
-        if "bukas" in lower:
-            info["date"] = (timezone.localdate() + timedelta(days=1)).isoformat()
-        elif re.search(r"\b([A-Za-z]{3,9})\s+\d{1,2}(?:,\s*\d{4})?\b", text or "") or re.search(r"\b\d{4}-\d{2}-\d{2}\b", text or ""):
-            d = _parse_date_only(text, None)  # timezone not needed for just date
-            if d:
-                info["date"] = d.isoformat()
-
-    if "time" in schema:
-        times = _parse_times(text or "")
-        if times:
-            h, m, ampm = times[0]
-            if ampm: h, m = _to_24h(h, m, ampm)
-            info["time"] = f"{h:02d}:{m:02d}"
-
-    if "destination" in schema:
-        for w in ["tagaytay", "qc", "quezon city", "makati", "antipolo"]:
-            if w in lower:
-                info["destination"] = w
-                break
-
-    if "service_type" in schema:
-        for w in ["haircut", "manicure", "rent", "rental", "catering", "event"]:
-            if w in lower:
-                info["service_type"] = w
-                break
-
-    return info
-
-def _nearest_alt_slot(biz: Business, date, minutes: int = 60):
-    if not free_slots_for_day:
-        return None
-    res = biz.resources.filter(is_active=True).first()
-    if not res:
-        return None
-    for d_offset in range(0, 4):
-        d = date + timedelta(days=d_offset)
-        slots = free_slots_for_day(biz, res, d, duration_minutes=minutes)
-        if slots:
-            return slots[0]
-    return None
-
-def _availability_reply(biz: Business, user_text: str, sender_id: str | None = None) -> str | None:
+def _availability_reply(biz: Business, text: str, sender_id: str | None = None) -> str | None:
     """
-    Friendly, context-aware availability reply.
-    Returns a short Taglish response, or None if not availability-related.
+    Human-friendly slot flow:
+      - Standalone date: list per-resource options (first few per resource)
+      - Date+time or "now": check 1h window across resources
+      - If utils are offline, never claim "fully booked"—ask for manual follow-up
     """
-    if not _wants_availability(biz, user_text, sender_id):
+    if not _wants_availability(biz, text, sender_id):
         return None
 
-    cfg = biz.availability_config or {}
-    followups = cfg.get("availability_followups") or [
-        "For when po ang booking (date & time)?",
-    ]
+    # 1) parse
+    date_only = _parse_date_only(text, biz)
+    times = _parse_times(text)
+    when = _parse_when(text, biz)
 
-    # Parse date/time
-    date = _parse_date_only(user_text, biz)
-    times = _parse_times(user_text)
+    # 2) no parse → ask a friendly follow-up
+    if not date_only and (not when or when == (None, None)):
+        _set_ctx(biz, sender_id or "anon")
+        return "For when po ang booking (date at oras)?"
 
-    # 0) Nothing usable → ask follow-ups, set short-lived context
-    if not date and not times:
-        _set_avail_ctx(biz, sender_id or "anon")
-        if len(followups) == 1:
-            return followups[0]
-        return "Para ma-check ko agad, paki-share po: " + " • ".join(followups[:2])
+    # 3) DATE ONLY → per resource list
+    if date_only and (when == (date_only, None)):
+        if not free_slots_for_day:
+            _set_ctx(biz, sender_id or "anon")
+            return "Live calendar check is offline ngayon. Puwede ko kayong tulungan manually—anong oras po?"
 
-    # 1) Time only → ask for the date specifically (don’t guess today)
-    if not date and times:
-        _set_avail_ctx(biz, sender_id or "anon")
-        (h, m, ampm) = times[0]
-        if ampm:
-            h, m = _to_24h(h, m, ampm)
-        hh = (h % 12) or 12
-        ap = "AM" if h < 12 else "PM"
-        return f"Noted: {hh}:{m:02d} {ap}. Anong date po?"
-
-    # 2) Date only → list first few free times per active resource
-    if date and not times:
         tz = _tz(biz)
         resources = list(biz.resources.filter(is_active=True))
+        any_open = False
         lines = []
 
         for r in resources:
-            if not free_slots_for_day:
-                continue
-            slots = free_slots_for_day(biz, r, date, duration_minutes=60)
+            slots = free_slots_for_day(biz, r, date_only, duration_minutes=60)
             if not slots:
                 continue
+            any_open = True
             human = []
             for s in slots[:4]:
                 st = datetime.fromisoformat(s["start"]).astimezone(tz)
                 human.append(st.strftime("%I:%M %p").lstrip("0"))
             lines.append(f"• {r.name}: {', '.join(human)} …")
 
-        _set_avail_ctx(biz, sender_id or "anon")  # keep context until they pick a time
+        _set_ctx(biz, sender_id or "anon")
 
-        if lines:
-            return f"Availability for {date:%b %d}:\n" + "\n".join(lines) + "\n\nMay preferred time ka ba?"
+        if any_open:
+            return f"Availability for {date_only:%b %d}:\n" + "\n".join(lines) + "\n\nMay preferred time ka ba?"
         else:
-            return f"Mukhang fully booked tayo sa {date:%b %d}. Gusto mo bang i-check ko ang next available day?"
+            # Suggest earliest across all resources/days
+            best = None
+            if nearest_free_slot:
+                for r in resources:
+                    nxt = nearest_free_slot(biz, r, date_only, duration_minutes=60, days_ahead=7)
+                    if nxt:
+                        if not best or nxt["start"] < best["start"]:
+                            best = nxt
+            if best:
+                astart = datetime.fromisoformat(best["start"]).astimezone(tz)
+                return f"Fully booked for {date_only:%b %d}. Ok ba {astart.strftime('%b %d %I:%M %p').lstrip('0')}?"
+            return f"Mukhang fully booked tayo sa {date_only:%b %d}. Gusto mo bang i-check ko ang ibang araw?"
 
-    # 3) Date + time(s) → check concrete window (default 1h if single time)
-    start_end = _parse_when(user_text, biz)
-    if start_end and isinstance(start_end[0], datetime) and isinstance(start_end[1], datetime):
-        start, end = start_end
-        ok_list = []
+    # 4) CONCRETE WINDOW (date + time / now)
+    if isinstance(when[0], datetime) and isinstance(when[1], datetime):
+        start, end = when
+        if not is_range_free:
+            _clear_ctx(biz, sender_id or "anon")
+            return "Live calendar check is offline ngayon. Gusto ninyong i-hold ko muna manually for approval?"
+
+        free_names = []
         for r in biz.resources.filter(is_active=True):
-            if is_range_free and is_range_free(biz, r, start, end):
-                ok_list.append(r.name)
+            try:
+                if is_range_free(biz, r, start, end):
+                    free_names.append(r.name)
+            except Exception:
+                log.exception("is_range_free error for resource %s", r.id)
 
-        if sender_id:
-            _clear_avail_ctx(biz, sender_id)
+        _clear_ctx(biz, sender_id or "anon")
 
-        if ok_list:
+        if free_names:
             span = f"{start.strftime('%b %d %I:%M %p').lstrip('0')}–{end.strftime('%I:%M %p').lstrip('0')}"
-            tops = ", ".join(ok_list[:3])
-            more = " (and more)" if len(ok_list) > 3 else ""
-            return f"Available sa {span}. Free: {tops}{more}. I-hold ko ba?"
+            show = ", ".join(free_names[:3]) + (" (and more)" if len(free_names) > 3 else "")
+            return f"Available sa {span}. Free: {show}. I-hold ko ba?"
         else:
-            alt = _nearest_alt_slot(biz, start.date(), minutes=60)
-            if alt:
-                astart = datetime.fromisoformat(alt["start"]).astimezone(_tz(biz))
+            # Propose an alternate earliest slot across resources
+            tz = _tz(biz)
+            best = None
+            if nearest_free_slot:
+                for r in biz.resources.filter(is_active=True):
+                    nxt = nearest_free_slot(biz, r, start.date(), duration_minutes=60, days_ahead=7)
+                    if nxt:
+                        if not best or nxt["start"] < best["start"]:
+                            best = nxt
+            if best:
+                astart = datetime.fromisoformat(best["start"]).astimezone(tz)
                 return f"Booked na ’yung oras na ’yan. Ok po ba {astart.strftime('%b %d %I:%M %p').lstrip('0')}?"
             return "Mukhang occupied ang oras na ’yan. May iba ka bang oras?"
 
-    # Fallback (shouldn’t hit)
-    _set_avail_ctx(biz, sender_id or "anon")
-    return "For when po ang booking (date & time)?"
+    # 5) fallback
+    _set_ctx(biz, sender_id or "anon")
+    return "For when po ang booking (date at oras)?"
 
-# ---------------------------
-# Webhook (single-app setup)
-# ---------------------------
+
+# =========================================================
+# Webhook
+# =========================================================
 
 @csrf_exempt
 def webhook(request, slug):
+    """
+    Messenger webhook endpoint.
+    Handles incoming messages for a given business slug.
+    """
     biz = get_object_or_404(Business, slug=slug)
 
+    # Verification (GET)
     if request.method == "GET":
         token = request.GET.get("hub.verify_token")
         challenge = request.GET.get("hub.challenge") or ""
-        return HttpResponse(challenge if token == biz.fb_verify_token else "Bad token",
-                            status=200 if token == biz.fb_verify_token else 403)
+        return HttpResponse(
+            challenge if token == biz.fb_verify_token else "Bad token",
+            status=200 if token == biz.fb_verify_token else 403
+        )
 
+    # Messages (POST)
     if request.method == "POST":
-        # Verify Meta signature (if configured)
-        if not _fb_verify_sig(
+        # Verify Meta signature (if set)
+        if not _verify_sig(
             biz.fb_app_secret,
             request.body,
             request.headers.get("X-Hub-Signature-256", "")
@@ -456,42 +432,43 @@ def webhook(request, slug):
             for event in entry.get("messaging", []):
                 msg = event.get("message", {}) or {}
 
-                # skip page echos
+                # Skip echoes (page/admin)
                 if msg.get("is_echo"):
                     continue
 
-                user_psid = event.get("sender", {}).get("id")
-                if not user_psid:
+                sender_id = event.get("sender", {}).get("id")
+                if not sender_id:
                     continue
 
                 text = (msg.get("text") or "").strip()
                 if not text:
                     continue
 
-                # allow manual commands like "#hello" without triggering bot
+                # Strip hashtag commands like "#manual hi"
                 if text.startswith("#"):
                     parts = text.split(maxsplit=1)
                     text = parts[1] if len(parts) > 1 else ""
                     if not text:
                         continue
 
-                _typing(biz.fb_page_access_token, user_psid, True)
+                _typing(biz.fb_page_access_token, sender_id, True)
 
-                # 1) Availability-first (but only if it actually looks like it)
-                avail_text = _availability_reply(biz, text, user_psid)
+                # Availability-first
+                avail_text = _availability_reply(biz, text, sender_id)
                 if avail_text is not None:
-                    _send_text(biz.fb_page_access_token, user_psid, avail_text)
-                    _typing(biz.fb_page_access_token, user_psid, False)
+                    _send_text(biz.fb_page_access_token, sender_id, avail_text)
+                    _typing(biz.fb_page_access_token, sender_id, False)
                     continue
 
-                # 2) Otherwise general AI, honoring system_prompt + business_context
+                # General AI reply (respects your prompt stack)
                 reply = _ai_reply(biz, text)
-                _send_text(biz.fb_page_access_token, user_psid, reply)
-                _typing(biz.fb_page_access_token, user_psid, False)
+                _send_text(biz.fb_page_access_token, sender_id, reply)
+                _typing(biz.fb_page_access_token, sender_id, False)
 
         return HttpResponse("ok", status=200)
 
     return HttpResponse(status=405)
+
 
 # =========================================================
 # Portal (pages for humans)
@@ -545,7 +522,11 @@ def portal_dashboard(request, slug):
     if not _user_can_access(request.user, biz):
         return HttpResponseForbidden("No access")
     resources = biz.resources.filter(is_active=True)
-    return render(request, "portal_dashboard.html", {"biz": biz, "resources": resources, "csrf": get_token(request)})
+    return render(
+        request,
+        "portal_dashboard.html",
+        {"biz": biz, "resources": resources, "csrf": get_token(request)},
+    )
 
 @login_required
 def portal_calendar(request, slug):
@@ -562,9 +543,21 @@ def portal_calendar(request, slug):
     }
     return render(request, "portal_calendar.html", ctx)
 
+
 # =========================================================
 # Simple Booking API (available/booked only)
 # =========================================================
+
+def _biz_auth(request, biz: Business) -> bool:
+    """
+    Simple machine-to-machine auth for the portal JS.
+    Accept either ?token=... or X-Manage-Token header.
+    If biz.manage_token is blank, allow in DEBUG for local dev.
+    """
+    token = request.headers.get("X-Manage-Token") or request.GET.get("token")
+    if biz.manage_token:
+        return token == biz.manage_token
+    return settings.DEBUG  # allow while configuring
 
 def _overlaps_qs(biz: Business, res: Resource, start, end):
     return Booking.objects.filter(
@@ -575,9 +568,7 @@ def _overlaps_qs(biz: Business, res: Resource, start, end):
 @require_http_methods(["GET"])
 def list_bookings(request, slug, resource_id):
     biz = get_object_or_404(Business, slug=slug)
-    # lightweight machine-to-machine auth if you want: ?token=...
-    token_header = request.headers.get("X-Manage-Token") or request.GET.get("token")
-    if biz.manage_token and token_header != biz.manage_token:
+    if not _biz_auth(request, biz):
         return HttpResponseForbidden("bad token")
 
     start = parse_datetime(request.GET.get("from") or "")
@@ -602,8 +593,7 @@ def list_bookings(request, slug, resource_id):
 @require_http_methods(["POST"])
 def create_booking(request, slug, resource_id):
     biz = get_object_or_404(Business, slug=slug)
-    token_header = request.headers.get("X-Manage-Token") or request.GET.get("token")
-    if biz.manage_token and token_header != biz.manage_token:
+    if not _biz_auth(request, biz):
         return HttpResponseForbidden("bad token")
 
     try:
@@ -623,6 +613,7 @@ def create_booking(request, slug, resource_id):
 
     res = get_object_or_404(Resource, pk=resource_id, business=biz)
 
+    # Capacity check
     if _overlaps_qs(biz, res, start, end).count() >= max(1, res.capacity):
         return JsonResponse({"ok": False, "reason": "conflict"}, status=409)
 
@@ -636,8 +627,7 @@ def create_booking(request, slug, resource_id):
 @require_http_methods(["DELETE"])
 def delete_booking(request, slug, resource_id):
     biz = get_object_or_404(Business, slug=slug)
-    token_header = request.headers.get("X-Manage-Token") or request.GET.get("token")
-    if biz.manage_token and token_header != biz.manage_token:
+    if not _biz_auth(request, biz):
         return HttpResponseForbidden("bad token")
 
     try:
@@ -652,6 +642,7 @@ def delete_booking(request, slug, resource_id):
     res = get_object_or_404(Resource, pk=resource_id, business=biz)
     get_object_or_404(Booking, pk=bid, business=biz, resource=res).delete()
     return JsonResponse({"ok": True})
+
 
 # ============================
 # Resource management (portal)
@@ -716,7 +707,6 @@ def resource_update(request, slug, resource_id):
         messages.success(request, "Resource updated.")
     else:
         messages.error(request, "Please fix the errors.")
-
     return redirect("portal_resources", slug=biz.slug)
 
 @login_required
@@ -731,8 +721,9 @@ def resource_delete(request, slug, resource_id):
     messages.success(request, "Resource deleted.")
     return redirect("portal_resources", slug=biz.slug)
 
+
 # ============================
-# JSON: resources (for your SPA/table)
+# Session-auth Resource JSON API
 # ============================
 
 @login_required
@@ -749,7 +740,7 @@ def portal_api_resources(request, slug):
         ]
         return JsonResponse({"resources": data})
 
-    # POST create JSON
+    # POST create
     try:
         body = json.loads(request.body.decode("utf-8") or "{}")
     except Exception:
@@ -798,20 +789,19 @@ def portal_api_resource_detail(request, slug, resource_id):
     r.delete()
     return JsonResponse({"ok": True})
 
-# ---------------------------
-# Public pages
-# ---------------------------
 
-from django.utils.timezone import now as _now
+# =========================================================
+# Public pages
+# =========================================================
 
 def legal_privacy(request):
-    return render(request, "legal/privacy.html", {"updated": _now().date()})
+    return render(request, "legal/privacy.html", {"updated": timezone.now().date()})
 
 def legal_terms(request):
-    return render(request, "legal/terms.html", {"updated": _now().date()})
+    return render(request, "legal/terms.html", {"updated": timezone.now().date()})
 
 def legal_data_deletion(request):
-    return render(request, "legal/data_deletion.html", {"updated": _now().date()})
+    return render(request, "legal/data_deletion.html", {"updated": timezone.now().date()})
 
 def about(request):
     return render(request, "about.html", {})
