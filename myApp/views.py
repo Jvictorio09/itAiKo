@@ -150,6 +150,38 @@ def _tz(biz: Business):
         return ZoneInfo(biz.timezone) if biz.timezone else timezone.get_current_timezone()
     except Exception:
         return timezone.get_current_timezone()
+    
+# --- NEW: duration parsing ---
+def _parse_duration_minutes(text: str) -> int | None:
+    t = (text or "").lower()
+    m = re.search(r'(\d{1,2})\s*(h|hr|hrs|hour|hours)\b', t)
+    if m:
+        return int(m.group(1)) * 60
+    m = re.search(r'(\d{1,2})\s*(d|day|days)\b', t)
+    if m:
+        return int(m.group(1)) * 24 * 60
+    if re.search(r'\bhalf[-\s]?day\b', t):
+        return 12 * 60
+    if re.search(r'\bovernight\b', t):
+        return 12 * 60
+    return None
+
+# --- NEW: context utilities for last window ---
+def _update_ctx(biz: Business, sid: str, **kwargs):
+    ctx = _get_ctx(biz, sid)
+    ctx.update(kwargs)
+    _set_ctx(biz, sid, ctx)
+
+def _get_last_start(biz: Business, sid: str):
+    ctx = _get_ctx(biz, sid)
+    iso = ctx.get("last_start")
+    if not iso:
+        return None
+    try:
+        return datetime.fromisoformat(iso)
+    except Exception:
+        return None
+
 
 # recognizer for “now”
 NOW_WORDS_RE = re.compile(r"\b(now( na)?|right now|ngayon( na)?)\b", re.I)
@@ -268,23 +300,74 @@ def _parse_when(text: str, biz):
 
     return (None, None)
 
+# --- Availability intent detection (strong + weak with guards) ---
+BOOKING_STRONG_RE = re.compile(
+    r"""
+    \b(
+        book(?:ing)?|                # book, booking
+        pa[-\s]*book|magpa[-\s]*book|pabook|magpabook|
+        reserve(?:rs?|ation)?|       # reserve, reservation
+        pa[-\s]*reserve|magpa[-\s]*reserve|pareserve|magpareserve|
+        sched|sked|schedule|iskedyul|isched|pa[-\s]*sched|magpa[-\s]*sched|
+        slot(?:s)?|availability|available|vacant|bakante|
+        open(?:\s*pa)?               # open / open pa
+    )\b
+    """,
+    re.I | re.X,
+)
+
+RENT_STRONG_RE = re.compile(
+    r"""
+    \b(
+        rent(?:al)?|renta|rental|arkila|arkilahin|
+        hire|with\s*driver|self[-\s]*drive|pickup|pick[-\s]*up|drop[-\s]*off
+    )\b
+    """,
+    re.I | re.X,
+)
+
+# Weak cues (require date/time or "now" context to avoid false positives):
+WEAK_RE = re.compile(r"\b(pwede|puwede|kaya|libre|free|later|mamaya)\b", re.I)
+
+# Expand "now" words (keep your old NOW_WORDS_RE if you have it)
+NOW_WORDS_RE = re.compile(
+    r"\b(now(\s*na)?|right\s*now|ngayon(\s*na)?|mamaya\s*na)\b",
+    re.I
+)
+
 def _wants_availability(biz: Business, text: str, sender_id: str | None = None) -> bool:
-    t = (text or "").lower()
+    t = (text or "").lower().strip()
+    if not t:
+        return False
+
+    # 1) Strong cues instantly trigger
+    if BOOKING_STRONG_RE.search(t) or RENT_STRONG_RE.search(t):
+        return True
+
+    # 2) "Now" words instantly trigger
     if NOW_WORDS_RE.search(t):
         return True
-    # Common keywords that imply booking intent (Taglish + EN)
-    kw = ["available", "availability", "avail", "book", "booking", "reserve",
-          "slot", "schedule", "pwede", "kaya", "bakante", "open", "free", "rent", "rental"]
-    if any(k in t for k in kw):
-        return True
-    if sender_id and _has_ctx(biz, sender_id):
-        return True
+
+    # 3) Weak cues only if there is a date/time signal
+    #    (prevents "is this free?" from triggering)
     try:
-        if _parse_date_only(text, biz) or _parse_times(text):
-            return True
+        has_date = bool(_parse_date_only(text, biz))
     except Exception:
-        pass
+        has_date = False
+    try:
+        has_time = bool(_parse_times(text))
+    except Exception:
+        has_time = False
+
+    if WEAK_RE.search(t) and (has_date or has_time):
+        return True
+
+    # 4) Pure date/time messages like "Aug 21 2pm" should still trigger
+    if has_date or has_time:
+        return True
+
     return False
+
 
 
 # =========================================================
@@ -292,27 +375,78 @@ def _wants_availability(biz: Business, text: str, sender_id: str | None = None) 
 # =========================================================
 
 def _availability_reply(biz: Business, text: str, sender_id: str | None = None) -> str | None:
-    """
-    Human-friendly slot flow:
-      - Standalone date: list per-resource options (first few per resource)
-      - Date+time or "now": check 1h window across resources
-      - If utils are offline, never claim "fully booked"—ask for manual follow-up
-    """
     if not _wants_availability(biz, text, sender_id):
         return None
 
-    # 1) parse
+    desired_minutes = _parse_duration_minutes(text) or 60
     date_only = _parse_date_only(text, biz)
-    times = _parse_times(text)
-    when = _parse_when(text, biz)
+    when = _parse_when(text, biz)  # (date, None) OR (start,end)
 
-    # 2) no parse → ask a friendly follow-up
-    if not date_only and (not when or when == (None, None)):
-        _set_ctx(biz, sender_id or "anon")
-        return "For when po ang booking (date at oras)?"
+    # If the user only changed the duration, reuse last start if we have it
+    last_start = _get_last_start(biz, sender_id or "anon")
 
-    # 3) DATE ONLY → per resource list
-    if date_only and (when == (date_only, None)):
+    # 1) If we have a concrete window (start,end), adjust to desired duration and check
+    if isinstance(when[0], datetime) and isinstance(when[1], datetime):
+        start = when[0]
+        end = start + timedelta(minutes=desired_minutes)
+
+        free_names = []
+        for r in biz.resources.filter(is_active=True):
+            try:
+                if is_range_free and is_range_free(biz, r, start, end):
+                    free_names.append(r.name)
+            except Exception:
+                log.exception("is_range_free error for resource %s", r.id)
+
+        # save last asked window to context
+        _update_ctx(biz, sender_id or "anon",
+                    active=True,
+                    last_start=start.isoformat(),
+                    last_duration=desired_minutes,
+                    last_date=start.date().isoformat())
+
+        if free_names:
+            span = f"{start.strftime('%b %d %I:%M %p').lstrip('0')}–{end.strftime('%I:%M %p').lstrip('0')}"
+            show = ", ".join(free_names[:3]) + (" (and more)" if len(free_names) > 3 else "")
+            return f"Available sa {span}. Free: {show}. I-hold ko ba?"
+        else:
+            # propose earliest continuous alternative for the same duration
+            tz = _tz(biz)
+            best = None
+            if nearest_free_slot:
+                for r in biz.resources.filter(is_active=True):
+                    nxt = nearest_free_slot(biz, r, start.date(), duration_minutes=desired_minutes, days_ahead=7)
+                    if nxt and (not best or nxt['start'] < best['start']):
+                        best = nxt
+            if best:
+                astart = datetime.fromisoformat(best["start"]).astimezone(tz)
+                return f"Booked na ’yung continuous {desired_minutes//60}h window. Ok ba {astart.strftime('%b %d %I:%M %p').lstrip('0')}?"
+            return "Mukhang occupied ang oras na ’yan. May iba ka bang oras?"
+
+    # 2) DATE ONLY (maybe with duration)
+    if date_only and when == (date_only, None):
+        # If user previously gave an exact time, reuse it with new duration
+        if last_start and last_start.date() == date_only and desired_minutes != 60:
+            start = last_start
+            end = start + timedelta(minutes=desired_minutes)
+            free_names = []
+            for r in biz.resources.filter(is_active=True):
+                try:
+                    if is_range_free and is_range_free(biz, r, start, end):
+                        free_names.append(r.name)
+                except Exception:
+                    pass
+            _update_ctx(biz, sender_id or "anon",
+                        active=True,
+                        last_start=start.isoformat(),
+                        last_duration=desired_minutes,
+                        last_date=start.date().isoformat())
+            if free_names:
+                span = f"{start.strftime('%b %d %I:%M %p').lstrip('0')}–{end.strftime('%I:%M %p').lstrip('0')}"
+                show = ", ".join(free_names[:3])
+                return f"Available sa {span}. Free: {show}. I-hold ko ba?"
+            # else fall through to search per-day windows
+
         if not free_slots_for_day:
             _set_ctx(biz, sender_id or "anon")
             return "Live calendar check is offline ngayon. Puwede ko kayong tulungan manually—anong oras po?"
@@ -323,73 +457,39 @@ def _availability_reply(biz: Business, text: str, sender_id: str | None = None) 
         lines = []
 
         for r in resources:
-            slots = free_slots_for_day(biz, r, date_only, duration_minutes=60)
+            slots = free_slots_for_day(biz, r, date_only, duration_minutes=desired_minutes)
             if not slots:
                 continue
             any_open = True
             human = []
             for s in slots[:4]:
                 st = datetime.fromisoformat(s["start"]).astimezone(tz)
-                human.append(st.strftime("%I:%M %p").lstrip("0"))
+                en = datetime.fromisoformat(s["end"]).astimezone(tz)
+                human.append(f"{st.strftime('%I:%M %p').lstrip('0')}–{en.strftime('%I:%M %p').lstrip('0')}")
             lines.append(f"• {r.name}: {', '.join(human)} …")
 
-        _set_ctx(biz, sender_id or "anon")
+        _update_ctx(biz, sender_id or "anon", active=True, last_date=date_only.isoformat(), last_duration=desired_minutes)
 
         if any_open:
-            return f"Availability for {date_only:%b %d}:\n" + "\n".join(lines) + "\n\nMay preferred time ka ba?"
+            pretty = f"{date_only:%b %d}"
+            return f"Availability for {pretty} (continuous {desired_minutes//60}h):\n" + "\n".join(lines) + "\n\nMay preferred time ka ba?"
         else:
-            # Suggest earliest across all resources/days
+            # don’t say “fully booked” for the whole day; it’s just the requested duration that’s tight
             best = None
             if nearest_free_slot:
                 for r in resources:
-                    nxt = nearest_free_slot(biz, r, date_only, duration_minutes=60, days_ahead=7)
-                    if nxt:
-                        if not best or nxt["start"] < best["start"]:
-                            best = nxt
+                    nxt = nearest_free_slot(biz, r, date_only, duration_minutes=desired_minutes, days_ahead=7)
+                    if nxt and (not best or nxt['start'] < best['start']):
+                        best = nxt
             if best:
                 astart = datetime.fromisoformat(best["start"]).astimezone(tz)
-                return f"Fully booked for {date_only:%b %d}. Ok ba {astart.strftime('%b %d %I:%M %p').lstrip('0')}?"
-            return f"Mukhang fully booked tayo sa {date_only:%b %d}. Gusto mo bang i-check ko ang ibang araw?"
+                return f"Walang continuous {desired_minutes//60}h window on {date_only:%b %d}. Earliest: {astart.strftime('%b %d %I:%M %p').lstrip('0')}. Ok ba ito?"
+            return f"For a continuous {desired_minutes//60}h today, wala tayong window. Gusto mo bang mag-suggest ako ng oras bukas?"
 
-    # 4) CONCRETE WINDOW (date + time / now)
-    if isinstance(when[0], datetime) and isinstance(when[1], datetime):
-        start, end = when
-        if not is_range_free:
-            _clear_ctx(biz, sender_id or "anon")
-            return "Live calendar check is offline ngayon. Gusto ninyong i-hold ko muna manually for approval?"
-
-        free_names = []
-        for r in biz.resources.filter(is_active=True):
-            try:
-                if is_range_free(biz, r, start, end):
-                    free_names.append(r.name)
-            except Exception:
-                log.exception("is_range_free error for resource %s", r.id)
-
-        _clear_ctx(biz, sender_id or "anon")
-
-        if free_names:
-            span = f"{start.strftime('%b %d %I:%M %p').lstrip('0')}–{end.strftime('%I:%M %p').lstrip('0')}"
-            show = ", ".join(free_names[:3]) + (" (and more)" if len(free_names) > 3 else "")
-            return f"Available sa {span}. Free: {show}. I-hold ko ba?"
-        else:
-            # Propose an alternate earliest slot across resources
-            tz = _tz(biz)
-            best = None
-            if nearest_free_slot:
-                for r in biz.resources.filter(is_active=True):
-                    nxt = nearest_free_slot(biz, r, start.date(), duration_minutes=60, days_ahead=7)
-                    if nxt:
-                        if not best or nxt["start"] < best["start"]:
-                            best = nxt
-            if best:
-                astart = datetime.fromisoformat(best["start"]).astimezone(tz)
-                return f"Booked na ’yung oras na ’yan. Ok po ba {astart.strftime('%b %d %I:%M %p').lstrip('0')}?"
-            return "Mukhang occupied ang oras na ’yan. May iba ka bang oras?"
-
-    # 5) fallback
+    # 3) No date/time parsed yet → ask a single crisp follow-up
     _set_ctx(biz, sender_id or "anon")
     return "For when po ang booking (date at oras)?"
+
 
 
 # =========================================================
