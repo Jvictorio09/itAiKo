@@ -3,7 +3,7 @@ from myApp import views
 
 urlpatterns = [
     # Portal
-    path("prtal/", views.portal_home, name="portal_home"),
+    path("portal/", views.portal_home, name="portal_home"),
     path("portal/login/", views.portal_login, name="portal_login"),
     path("portal/logout/", views.portal_logout, name="portal_logout"),
     path("portal/<slug:slug>/", views.portal_dashboard, name="portal_dashboard"),
@@ -32,4 +32,8 @@ urlpatterns = [
     path("legal/data-deletion/", views.legal_data_deletion, name="legal_data_deletion"),
     path("", views.about, name="about"),
     path("contact/", views.contact, name="contact"),
+
+    path("portal/<slug:slug>/bot-test/", views.portal_bot_test, name="portal_bot_test"),
+    path("portal/<slug:slug>/bot-test/clear", views.portal_bot_clear_ctx, name="portal_bot_clear_ctx"),
+
 ]

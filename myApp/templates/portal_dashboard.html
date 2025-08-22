@@ -1,22 +1,189 @@
 <!doctype html>
-<html>
-<head><meta charset="utf-8"><title>{{ biz.name }} – Portal</title></head>
-<body style="max-width:900px;margin:24px auto;font-family:system-ui">
-  <div style="display:flex;justify-content:space-between;align-items:center">
-    <h2>{{ biz.name }} – Portal</h2>
-    <div><a href="{% url 'portal_logout' %}">Logout</a></div>
-  </div>
-  <p>Timezone: {{ biz.timezone }}</p>
-  <h3>Resources</h3>
-  <ul>
-    {% for r in resources %}
-      <li>
-        <a href="{% url 'portal_calendar' biz.slug %}?resource_id={{ r.id }}">{{ r.name }}</a>
-        <small>(capacity {{ r.capacity }})</small>
-      </li>
-    {% empty %}
-      <li>No resources yet.</li>
-    {% endfor %}
-  </ul>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ biz.name }} — Portal</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    /* nice scrollbar for chat */
+    .thin-scroll::-webkit-scrollbar{width:8px;height:8px}
+    .thin-scroll::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:9999px}
+    .thin-scroll{scrollbar-color:#cbd5e1 transparent;scrollbar-width:thin}
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800">
+  <!-- Topbar -->
+  <header class="bg-white border-b border-slate-200">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="h-10 w-10 rounded-2xl bg-indigo-600 text-white grid place-items-center font-bold">R</div>
+        <div>
+          <h1 class="text-lg font-semibold">{{ biz.name }}</h1>
+          <p class="text-xs text-slate-500">Timezone: {{ biz.timezone }}</p>
+        </div>
+      </div>
+      <nav class="flex items-center gap-3">
+        <a href="{% url 'portal_calendar' slug=biz.slug %}" class="text-sm px-3 py-2 rounded-lg bg-slate-100 hover:bg-slate-200">Calendar</a>
+        <a href="{% url 'portal_resources' slug=biz.slug %}" class="text-sm px-3 py-2 rounded-lg bg-slate-100 hover:bg-slate-200">Resources</a>
+        <a href="{% url 'portal_logout' %}" class="text-sm px-3 py-2 rounded-lg bg-rose-100 text-rose-700 hover:bg-rose-200">Logout</a>
+      </nav>
+    </div>
+  </header>
+
+  <!-- Content -->
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <!-- Left: Resources -->
+      <section class="lg:col-span-1">
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="text-base font-semibold">Resources</h2>
+            <a href="{% url 'portal_resources' slug=biz.slug %}" class="text-sm text-indigo-600 hover:underline">Manage</a>
+          </div>
+
+          {% if resources %}
+            <ul class="space-y-3">
+              {% for r in resources %}
+                <li class="border border-slate-200 rounded-xl p-4 hover:shadow-sm transition">
+                  <div class="flex items-start justify-between gap-3">
+                    <div>
+                      <div class="flex items-center gap-2">
+                        <span class="font-medium">{{ r.name }}</span>
+                        {% if r.is_active %}
+                          <span class="inline-flex items-center text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">Active</span>
+                        {% else %}
+                          <span class="inline-flex items-center text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">Inactive</span>
+                        {% endif %}
+                      </div>
+                      <p class="text-xs text-slate-500 mt-1">Capacity: {{ r.capacity }}</p>
+                    </div>
+                    <div class="flex gap-2">
+                      <a href="{% url 'portal_calendar' slug=biz.slug %}?resource_id={{ r.id }}"
+                         class="text-xs px-3 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700">View calendar</a>
+                    </div>
+                  </div>
+                </li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <div class="text-sm text-slate-600">No resources yet. Add one in <a href="{% url 'portal_resources' slug=biz.slug %}" class="text-indigo-600 hover:underline">Resources</a>.</div>
+          {% endif %}
+        </div>
+
+        <!-- Quick Tips -->
+        <div class="mt-6 bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
+          <h3 class="text-sm font-semibold mb-2">Playground Tips</h3>
+          <ul class="text-sm text-slate-600 space-y-1">
+            <li>Try: <code class="bg-slate-100 px-1 rounded">“May available ba today for 12 hours starting 8pm?”</code></li>
+            <li>Try: <code class="bg-slate-100 px-1 rounded">“Aug 22 9am, 3 hours, Mirage”</code></li>
+            <li>Try: <code class="bg-slate-100 px-1 rounded">“Haircut bukas 2pm”</code> (for cross-business sanity)</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- Right: Bot Playground -->
+      <section class="lg:col-span-2">
+        <div class="bg-white rounded-2xl shadow-sm border border-slate-200 flex flex-col h-[70vh]">
+          <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+            <h2 class="text-base font-semibold">Bot Playground</h2>
+            <div class="text-xs text-slate-500">Talk to your assistant exactly like a customer would.</div>
+          </div>
+
+          <!-- Chat area -->
+          <div id="chatLog" class="flex-1 overflow-y-auto thin-scroll p-5 space-y-4 bg-slate-50">
+            <!-- messages injected here -->
+          </div>
+
+          <!-- Input bar -->
+          <div class="border-t border-slate-200 p-4">
+            <form id="chatForm" class="flex items-end gap-3">
+              <textarea id="chatInput" rows="2" placeholder="Type a message…"
+                        class="flex-1 resize-none rounded-xl border border-slate-300 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 px-3 py-2 text-sm"></textarea>
+              <button type="submit"
+                      class="shrink-0 inline-flex items-center gap-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 text-sm font-medium">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-9.193 5.315a.75.75 0 01-1.11-.65V8.167a.75.75 0 011.11-.65l9.193 5.315a.75.75 0 010 1.3zM21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                Send
+              </button>
+            </form>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    const chatLog   = document.getElementById('chatLog');
+    const chatForm  = document.getElementById('chatForm');
+    const chatInput = document.getElementById('chatInput');
+
+    const CSRF = "{{ csrf|default:'' }}";  // from view context
+
+    function bubble(role, text){
+      const wrap = document.createElement('div');
+      const isUser = role === 'user';
+      wrap.className = `flex ${isUser ? 'justify-end' : 'justify-start'}`;
+
+      const bubble = document.createElement('div');
+      bubble.className = `${isUser ? 'bg-indigo-600 text-white' : 'bg-white text-slate-800'} max-w-[80%] rounded-2xl px-4 py-3 shadow-sm border ${isUser ? 'border-indigo-600/0' : 'border-slate-200'}`;
+      bubble.innerText = text;
+      wrap.appendChild(bubble);
+      chatLog.appendChild(wrap);
+      chatLog.scrollTop = chatLog.scrollHeight;
+    }
+
+    function typing(on=true){
+      let el = document.getElementById('typingRow');
+      if(on){
+        if(el) return;
+        el = document.createElement('div');
+        el.id = 'typingRow';
+        el.className = 'flex justify-start';
+        el.innerHTML = `<div class="bg-white text-slate-600 max-w-[80%] rounded-2xl px-4 py-3 shadow-sm border border-slate-200">
+                          <span class="inline-flex items-center gap-2">
+                            <span class="h-2 w-2 bg-slate-400 rounded-full animate-pulse"></span>
+                            <span class="h-2 w-2 bg-slate-400 rounded-full animate-pulse" style="animation-delay:.15s"></span>
+                            <span class="h-2 w-2 bg-slate-400 rounded-full animate-pulse" style="animation-delay:.3s"></span>
+                          </span>
+                        </div>`;
+        chatLog.appendChild(el);
+        chatLog.scrollTop = chatLog.scrollHeight;
+      } else {
+        if(el) el.remove();
+      }
+    }
+
+    async function sendMessage(text){
+      typing(true);
+      try{
+        const res = await fetch("{% url 'portal_bot_test' slug=biz.slug %}", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-CSRFToken": CSRF
+          },
+          body: JSON.stringify({ text })
+        });
+        const data = await res.json();
+        typing(false);
+        bubble('bot', data.reply || 'No reply.');
+      } catch(e){
+        typing(false);
+        bubble('bot', 'Oops, nagka-issue sandali. Pakiulit po.');
+      }
+    }
+
+    chatForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const text = chatInput.value.trim();
+      if(!text) return;
+      bubble('user', text);
+      chatInput.value = '';
+      sendMessage(text);
+    });
+
+    // Starter msg
+    bubble('bot', 'Hello! You can test me here. Ask about availability, make a booking, or smalltalk 😊');
+  </script>
 </body>
 </html>

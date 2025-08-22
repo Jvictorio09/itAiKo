@@ -6,7 +6,9 @@ from datetime import datetime, timedelta, time as dtime
 from zoneinfo import ZoneInfo
 
 from django.conf import settings
-from django.http import HttpResponse, JsonResponse, HttpResponseBadRequest, HttpResponseForbidden
+from django.http import (
+    HttpResponse, JsonResponse, HttpResponseBadRequest, HttpResponseForbidden
+)
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from django.core.cache import cache
@@ -20,9 +22,9 @@ from django.contrib.auth.decorators import login_required
 from django import forms
 from django.middleware.csrf import get_token
 
-from .models import Business, BusinessMember, Resource, Booking, Snippet  # ensure Snippet exists
+from .models import Business, BusinessMember, Resource, Booking, Snippet  # Snippet optional
 
-# Availability helpers (your updated utils)
+# Availability helpers (optional utils)
 try:
     from .availability_utils import free_slots_for_day, is_range_free, nearest_free_slot
 except Exception:
@@ -38,6 +40,31 @@ GRAPH_BASE = "https://graph.facebook.com/v20.0"
 GRAPH_MSGS = f"{GRAPH_BASE}/me/messages"
 OPENAI_API_KEY = getattr(settings, "OPENAI_API_KEY", "")
 client = OpenAI(api_key=OPENAI_API_KEY)
+
+
+# =========================================================
+# General helpers
+# =========================================================
+
+def _tz(biz: Business):
+    """
+    Resolve timezone with sane fallbacks:
+      1) biz.timezone (string like 'Asia/Manila')
+      2) settings.TIME_ZONE
+      3) Django's current timezone
+    """
+    tz_name = getattr(biz, "timezone", None) or getattr(settings, "TIME_ZONE", None)
+    if isinstance(tz_name, str):
+        try:
+            return ZoneInfo(tz_name)
+        except Exception:
+            pass
+    try:
+        # Django current tz is a tzinfo object
+        return timezone.get_current_timezone()
+    except Exception:
+        # Final fallback
+        return ZoneInfo("UTC")
 
 
 # =========================================================
@@ -94,15 +121,13 @@ def _compose_prompt(biz: Business) -> str:
         parts.append(biz.system_prompt.strip())
     if getattr(biz, "business_context", ""):
         parts += ["\n### Business Context", biz.business_context.strip()]
-    # Optional snippets, if model exists
     if hasattr(biz, "snippets"):
         for sn in biz.snippets.all():
             label = (sn.title or sn.key or "Snippet").title()
             parts += [f"\n### {label}", (sn.content or "").strip()]
-    # Guardrails / restricted topics
     if getattr(biz, "blocked_keywords", None):
         try:
-            blocked = ", ".join(biz.blocked_keywords)  # ArrayField/list expected
+            blocked = ", ".join(biz.blocked_keywords)
         except Exception:
             blocked = str(biz.blocked_keywords)
         parts += [f"\n### Restricted\nNever discuss: {blocked}."]
@@ -126,32 +151,57 @@ def _ai_reply(biz: Business, user_msg: str) -> str:
 
 
 # =========================================================
+# Availability context (per-sender, lightweight)
+# =========================================================
+
+def _avail_ctx_key(biz: Business, sid: str) -> str:
+    return f"avail_ctx:{biz.id}:{sid}"
+
+def _get_ctx_avail(biz: Business, sid: str) -> dict:
+    return cache.get(_avail_ctx_key(biz, sid), {}) or {}
+
+def _set_ctx_avail(biz: Business, sid: str, ctx: dict | None = None, minutes: int = 30):
+    key = _avail_ctx_key(biz, sid)
+    if not ctx:
+        cache.delete(key)
+    else:
+        cache.set(key, ctx, minutes * 60)
+
+def _clear_ctx_avail(biz: Business, sid: str):
+    cache.delete(_avail_ctx_key(biz, sid))
+
+def _has_ctx_avail(biz: Business, sid: str) -> bool:
+    return bool(_get_ctx_avail(biz, sid))
+
+# Back-compat thin wrappers (old names used elsewhere)
+def _get_ctx(biz: Business, sid: str) -> dict:
+    return _get_ctx_avail(biz, sid)
+
+def _set_ctx(biz: Business, sid: str, ctx: dict | None = None, minutes: int = 30):
+    return _set_ctx_avail(biz, sid, ctx, minutes)
+
+def _clear_ctx(biz: Business, sid: str):
+    return _clear_ctx_avail(biz, sid)
+
+def _has_ctx(biz: Business, sid: str) -> bool:
+    return _has_ctx_avail(biz, sid)
+
+def _update_ctx(biz: Business, sid: str, **kwargs):
+    ctx = _get_ctx_avail(biz, sid)
+    ctx.update(kwargs)
+    _set_ctx_avail(biz, sid, ctx)
+
+
+# =========================================================
 # Availability intent + parsing
 # =========================================================
 
-# Per-sender lightweight ctx (just signals we're in a booking flow)
-def _ctx_key(biz: Business, sid: str) -> str:
-    return f"mbot:ctx:{biz.slug}:{sid}:avail"
+def _round_up_15(dtobj: datetime):
+    minutes = (15 - (dtobj.minute % 15)) % 15
+    base = dtobj.replace(second=0, microsecond=0)
+    return base if minutes == 0 else base + timedelta(minutes=minutes)
 
-def _get_ctx(biz: Business, sid: str) -> dict:
-    return cache.get(_ctx_key(biz, sid), {})
-
-def _set_ctx(biz: Business, sid: str, ctx: dict | None = None, minutes: int = 30):
-    cache.set(_ctx_key(biz, sid), (ctx or {"active": True}), minutes * 60)
-
-def _clear_ctx(biz: Business, sid: str):
-    cache.delete(_ctx_key(biz, sid))
-
-def _has_ctx(biz: Business, sid: str) -> bool:
-    return bool(cache.get(_ctx_key(biz, sid)))
-
-def _tz(biz: Business):
-    try:
-        return ZoneInfo(biz.timezone) if biz.timezone else timezone.get_current_timezone()
-    except Exception:
-        return timezone.get_current_timezone()
-    
-# --- NEW: duration parsing ---
+# duration parsing
 def _parse_duration_minutes(text: str) -> int | None:
     t = (text or "").lower()
     m = re.search(r'(\d{1,2})\s*(h|hr|hrs|hour|hours)\b', t)
@@ -166,14 +216,9 @@ def _parse_duration_minutes(text: str) -> int | None:
         return 12 * 60
     return None
 
-# --- NEW: context utilities for last window ---
-def _update_ctx(biz: Business, sid: str, **kwargs):
-    ctx = _get_ctx(biz, sid)
-    ctx.update(kwargs)
-    _set_ctx(biz, sid, ctx)
-
+# context utilities
 def _get_last_start(biz: Business, sid: str):
-    ctx = _get_ctx(biz, sid)
+    ctx = _get_ctx_avail(biz, sid)
     iso = ctx.get("last_start")
     if not iso:
         return None
@@ -182,11 +227,10 @@ def _get_last_start(biz: Business, sid: str):
     except Exception:
         return None
 
-
-# recognizer for “now”
+# recognizers / regexes
 NOW_WORDS_RE = re.compile(r"\b(now( na)?|right now|ngayon( na)?)\b", re.I)
-
-# Strict time regex (2pm, 14:00, 2:30 PM, 2-4pm, 2 to 4; ignores bare 18 in Aug 18)
+LATER_WORDS_RE = re.compile(r"\b(later|mamaya(?:ng)?(?: gabi)?|tonight)\b", re.I)
+TOMORROW_WORDS_RE = re.compile(r"\b(bukas|tomorrow)\b", re.I)
 _TIME_RE = re.compile(r"(?<!\d)(?P<h>\d{1,2})(?::(?P<m>\d{2}))?\s*(?P<ampm>am|pm)?(?!\d)", re.I)
 
 def _to_24h(h: int, m: int, ampm: str):
@@ -219,12 +263,14 @@ def _parse_times(text: str):
 def _parse_date_only(text: str, biz) -> datetime.date | None:
     t = (text or "").lower()
     today = timezone.localdate()
+
     if "today" in t or "ngayon" in t:
         return today
-    if "tomorrow" in t or "bukas" in t:
+    if TOMORROW_WORDS_RE.search(t):
         return today + timedelta(days=1)
+    if LATER_WORDS_RE.search(t):
+        return today
 
-    # YYYY-MM-DD
     m = re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b", text or "")
     if m:
         try:
@@ -233,7 +279,6 @@ def _parse_date_only(text: str, biz) -> datetime.date | None:
         except ValueError:
             pass
 
-    # Aug 21 (, 2025)
     m2 = re.search(r"\b([A-Za-z]{3,9})\s+(\d{1,2})(?:,\s*(\d{4}))?\b", text or "")
     if m2:
         try:
@@ -244,11 +289,6 @@ def _parse_date_only(text: str, biz) -> datetime.date | None:
         except Exception:
             pass
     return None
-
-def _round_up_15(dtobj: datetime):
-    minutes = (15 - (dtobj.minute % 15)) % 15
-    base = dtobj.replace(second=0, microsecond=0)
-    return base if minutes == 0 else base + timedelta(minutes=minutes)
 
 def _parse_when(text: str, biz):
     """
@@ -300,25 +340,101 @@ def _parse_when(text: str, biz):
 
     return (None, None)
 
+def _remember_hints_from_text(biz: Business, sid: str, text: str):
+    t = (text or "").lower()
+    today = timezone.localdate()
+    if LATER_WORDS_RE.search(t):
+        _update_ctx(biz, sid, hint_date=today.isoformat())
+    elif TOMORROW_WORDS_RE.search(t):
+        _update_ctx(biz, sid, hint_date=(today + timedelta(days=1)).isoformat())
 
+# --- booking intent quick detector ---
+BOOKING_KEYWORDS_RE = re.compile(
+    r"\b(book|booking|reserve|reservation|rent|availability|available|schedule|slot|hold|"
+    r"magpa(?:-|\s)?book|pa(?:-|\s)?reserve|pahold|pa(?:-|\s)?book)\b",
+    re.I
+)
 
-
+def _looks_bookingish(text: str) -> bool:
+    t = (text or "").strip()
+    if not t:
+        return False
+    if BOOKING_KEYWORDS_RE.search(t):
+        return True
+    # obvious temporal hints
+    if NOW_WORDS_RE.search(t) or LATER_WORDS_RE.search(t) or TOMORROW_WORDS_RE.search(t):
+        return True
+    # time or date patterns (e.g., "2pm", "Aug 21", "2025-08-21")
+    if _parse_times(t):
+        return True
+    if re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b", t) or re.search(r"\b([A-Za-z]{3,9})\s+\d{1,2}\b", t):
+        return True
+    # duration words (hour/day/overnight/half day)
+    if _parse_duration_minutes(t):
+        return True
+    return False
 
 # =========================================================
-# Availability reply
+# Availability reply (with "booking-ish" gate)
 # =========================================================
 
-def _availability_reply(biz: Business, text: str, sender_id: str | None = None) -> str | None:
-    
+def _availability_reply(
+    biz: Business,
+    text: str,
+    sender_id: str | None = None,
+    parsed: dict | None = None
+) -> str | None:
+    sid = sender_id or "anon"
 
-    desired_minutes = _parse_duration_minutes(text) or 60
-    date_only = _parse_date_only(text, biz)
-    when = _parse_when(text, biz)  # (date, None) OR (start,end)
+    # Use AI-extracted entities when given; otherwise parse text.
+    ai_date = (parsed or {}).get("date")
+    ai_start = (parsed or {}).get("start_time")
+    ai_dur = (parsed or {}).get("duration_minutes")
 
-    # If the user only changed the duration, reuse last start if we have it
-    last_start = _get_last_start(biz, sender_id or "anon")
+    _remember_hints_from_text(biz, sid, text)
+    ctx = _get_ctx(biz, sid)
+    hinted_iso = ctx.get("hint_date")
 
-    # 1) If we have a concrete window (start,end), adjust to desired duration and check
+    desired_minutes = ai_dur or _parse_duration_minutes(text) or 60
+
+    # If AI provided date/time, construct 'when' directly; else use local parser.
+    if ai_date and ai_start:
+        try:
+            tz = _tz(biz)
+            hh, mm = [int(x) for x in ai_start.split(":")[:2]]
+            start = timezone.make_aware(datetime.combine(
+                datetime.strptime(ai_date, "%Y-%m-%d").date(),
+                dtime(hh, mm)
+            ), tz)
+            end = start + timedelta(minutes=desired_minutes)
+            when = (start, end)
+            date_only = start.date()
+        except Exception:
+            date_only = _parse_date_only(text, biz)
+            when = _parse_when(text, biz)
+    elif ai_date and not ai_start:
+        try:
+            date_only = datetime.strptime(ai_date, "%Y-%m-%d").date()
+        except Exception:
+            date_only = _parse_date_only(text, biz)
+        when = (date_only, None) if date_only else (None, None)
+    else:
+        date_only = _parse_date_only(text, biz)
+        when = _parse_when(text, biz)
+
+    # Combine hinted date + time-only
+    if when == (None, None) and hinted_iso:
+        try:
+            hinted_date = datetime.fromisoformat(hinted_iso).date()
+            when = _parse_when(f"{hinted_date.isoformat()} {text}", biz)
+            if not date_only:
+                date_only = hinted_date
+        except Exception:
+            pass
+
+    last_start = _get_last_start(biz, sid)
+
+    # 1) Concrete window
     if isinstance(when[0], datetime) and isinstance(when[1], datetime):
         start = when[0]
         end = start + timedelta(minutes=desired_minutes)
@@ -331,8 +447,7 @@ def _availability_reply(biz: Business, text: str, sender_id: str | None = None) 
             except Exception:
                 log.exception("is_range_free error for resource %s", r.id)
 
-        # save last asked window to context
-        _update_ctx(biz, sender_id or "anon",
+        _update_ctx(biz, sid,
                     active=True,
                     last_start=start.isoformat(),
                     last_duration=desired_minutes,
@@ -343,7 +458,6 @@ def _availability_reply(biz: Business, text: str, sender_id: str | None = None) 
             show = ", ".join(free_names[:3]) + (" (and more)" if len(free_names) > 3 else "")
             return f"Available sa {span}. Free: {show}. I-hold ko ba?"
         else:
-            # propose earliest continuous alternative for the same duration
             tz = _tz(biz)
             best = None
             if nearest_free_slot:
@@ -353,12 +467,13 @@ def _availability_reply(biz: Business, text: str, sender_id: str | None = None) 
                         best = nxt
             if best:
                 astart = datetime.fromisoformat(best["start"]).astimezone(tz)
-                return f"Booked na ’yung continuous {desired_minutes//60}h window. Ok ba {astart.strftime('%b %d %I:%M %p').lstrip('0')}?"
+                hrs = desired_minutes // 60 if desired_minutes % 60 == 0 else desired_minutes
+                unit = "h" if isinstance(hrs, int) else "min"
+                return f"Booked na ’yung {hrs}{unit} window. Ok ba {astart.strftime('%b %d %I:%M %p').lstrip('0')}?"
             return "Mukhang occupied ang oras na ’yan. May iba ka bang oras?"
 
-    # 2) DATE ONLY (maybe with duration)
+    # 2) Date only (maybe with duration)
     if date_only and when == (date_only, None):
-        # If user previously gave an exact time, reuse it with new duration
         if last_start and last_start.date() == date_only and desired_minutes != 60:
             start = last_start
             end = start + timedelta(minutes=desired_minutes)
@@ -369,7 +484,7 @@ def _availability_reply(biz: Business, text: str, sender_id: str | None = None) 
                         free_names.append(r.name)
                 except Exception:
                     pass
-            _update_ctx(biz, sender_id or "anon",
+            _update_ctx(biz, sid,
                         active=True,
                         last_start=start.isoformat(),
                         last_duration=desired_minutes,
@@ -378,10 +493,9 @@ def _availability_reply(biz: Business, text: str, sender_id: str | None = None) 
                 span = f"{start.strftime('%b %d %I:%M %p').lstrip('0')}–{end.strftime('%I:%M %p').lstrip('0')}"
                 show = ", ".join(free_names[:3])
                 return f"Available sa {span}. Free: {show}. I-hold ko ba?"
-            # else fall through to search per-day windows
 
         if not free_slots_for_day:
-            _set_ctx(biz, sender_id or "anon")
+            _set_ctx(biz, sid)
             return "Live calendar check is offline ngayon. Puwede ko kayong tulungan manually—anong oras po?"
 
         tz = _tz(biz)
@@ -401,13 +515,14 @@ def _availability_reply(biz: Business, text: str, sender_id: str | None = None) 
                 human.append(f"{st.strftime('%I:%M %p').lstrip('0')}–{en.strftime('%I:%M %p').lstrip('0')}")
             lines.append(f"• {r.name}: {', '.join(human)} …")
 
-        _update_ctx(biz, sender_id or "anon", active=True, last_date=date_only.isoformat(), last_duration=desired_minutes)
+        _update_ctx(biz, sid, active=True, last_date=date_only.isoformat(), last_duration=desired_minutes)
 
         if any_open:
             pretty = f"{date_only:%b %d}"
-            return f"Availability for {pretty} (continuous {desired_minutes//60}h):\n" + "\n".join(lines) + "\n\nMay preferred time ka ba?"
+            hrs = desired_minutes // 60 if desired_minutes % 60 == 0 else desired_minutes
+            unit = "h" if isinstance(hrs, int) else "min"
+            return f"Availability for {pretty} (continuous {hrs}{unit}):\n" + "\n".join(lines) + "\n\nMay preferred time ka ba?"
         else:
-            # don’t say “fully booked” for the whole day; it’s just the requested duration that’s tight
             best = None
             if nearest_free_slot:
                 for r in resources:
@@ -416,45 +531,86 @@ def _availability_reply(biz: Business, text: str, sender_id: str | None = None) 
                         best = nxt
             if best:
                 astart = datetime.fromisoformat(best["start"]).astimezone(tz)
-                return f"Walang continuous {desired_minutes//60}h window on {date_only:%b %d}. Earliest: {astart.strftime('%b %d %I:%M %p').lstrip('0')}. Ok ba ito?"
-            return f"For a continuous {desired_minutes//60}h today, wala tayong window. Gusto mo bang mag-suggest ako ng oras bukas?"
+                hrs = desired_minutes // 60 if desired_minutes % 60 == 0 else desired_minutes
+                unit = "h" if isinstance(hrs, int) else "min"
+                return f"Walang continuous {hrs}{unit} window on {date_only:%b %d}. Earliest: {astart.strftime('%b %d %I:%M %p').lstrip('0')}. Ok ba ito?"
+            return "Walang window for that duration on that date. Gusto mo bang mag-suggest ako ng ibang oras o ibang araw?"
 
-    # 3) No date/time parsed yet → ask a single crisp follow-up
-    _set_ctx(biz, sender_id or "anon")
+    # 3) Not enough info → ask one crisp follow-up
+    _set_ctx(biz, sid)
     return "For when po ang booking (date at oras)?"
 
-# --- AI-first NLU & booking router (drop-in) ---------------------
-import json as _json
-from datetime import datetime as _dt, timedelta as _td
-from django.utils import timezone as _tz
 
-# 1) NLU: ask the model to return strict JSON (no keyword lists)
+def _route_reply(biz: Business, sender_id: str, text: str) -> str:
+    """
+    AI-centered router:
+      - If AI says intent is availability/booking/reservation → run availability flow
+      - Else → general AI reply using full business prompt stack
+    """
+    parsed = _ai_understand(biz, text)
+    intent = parsed.get("intent", "other")
+
+    if intent in {"availability", "booking", "reservation"}:
+        # Let availability flow use AI-extracted entities
+        reply = _availability_reply(biz, text, sender_id, parsed=parsed)
+        if reply:
+            return reply
+        # If availability needed more details, it already returned a follow-up question.
+        # As a safety net, fall back to general AI:
+        return _ai_reply(biz, text)
+
+    # Non-booking intents (pricing, inventory, policy, greeting, smalltalk, faq, other)
+    return _ai_reply(biz, text)
+
+
+# =========================================================
+# AI-first NLU booking router (optional)
+# =========================================================
+
+import json as _json
+
+INTENT_SET = {
+    "availability", "booking", "reservation",
+    "pricing", "inventory", "policy",
+    "greeting", "smalltalk", "faq", "other"
+}
+
 def _ai_understand(biz: Business, user_msg: str) -> dict:
     """
-    Returns a dict like:
-    {
-      "intent": "availability|booking|greeting|smalltalk|faq|other",
-      "date": "YYYY-MM-DD" | null,
-      "start_time": "HH:MM" | null,   # 24h, local to biz
-      "duration_minutes": int | null,
-      "service_type": str | null,     # e.g. "car_rental", "haircut"
-      "resource_name": str | null,
-      "notes": str | null,
-      "confidence": 0.0-1.0
-    }
+    AI-first router. Classifies the user's intent using the business's
+    system prompt + context + snippets. No keyword heuristics.
+    Returns a normalized dict; missing fields → None.
     """
-    # Guard: if no OpenAI key, safely fallback to simple other
     if not OPENAI_API_KEY:
-        return {"intent": "other", "date": None, "start_time": None, "duration_minutes": None,
-                "service_type": None, "resource_name": None, "notes": None, "confidence": 0.0}
+        return {
+            "intent": "other", "confidence": 0.0,
+            "date": None, "start_time": None, "duration_minutes": None,
+            "service_type": None, "resource_name": None, "notes": None
+        }
 
-    system = (
+    # Build a router-focused system message using your prompt stack
+    sys = (
         _compose_prompt(biz)
-        + "\n\nYou are an NLU parser. Extract user intent and entities for booking/availability across any business type. "
-          "Return ONLY a single JSON object. Do not include code fences or commentary."
+        + "\n\nYou are an intent router and entity extractor for this business. "
+          "Decide if the user is asking about booking/availability, or something else "
+          "(pricing, inventory/vehicles, policy, FAQ, greeting/smalltalk, other). "
+          "If (and only if) they are trying to book or check availability, extract date/time/duration. "
+          "Output ONLY a single JSON object matching the schema."
     )
 
-    # Prefer JSON mode if supported; otherwise we post-process
+    schema_hint = (
+        "{"
+        "\"intent\":\"availability|booking|reservation|pricing|inventory|policy|greeting|smalltalk|faq|other\","
+        "\"confidence\":\"0.0-1.0\","
+        "\"date\":\"YYYY-MM-DD|null\","
+        "\"start_time\":\"HH:MM|null\","
+        "\"duration_minutes\":\"int|null\","
+        "\"service_type\":\"string|null\","
+        "\"resource_name\":\"string|null\","
+        "\"notes\":\"string|null\""
+        "}"
+    )
+
     try:
         r = client.chat.completions.create(
             model=biz.model_name,
@@ -462,151 +618,109 @@ def _ai_understand(biz: Business, user_msg: str) -> dict:
             max_tokens=min(512, int(biz.max_tokens or 512)),
             response_format={"type": "json_object"},
             messages=[
-                {"role": "system", "content": system},
-                {"role": "user",
-                 "content": (
-                    "Extract intent and fields.\n"
-                    "Schema:\n"
-                    "{"
-                    "\"intent\": \"availability|booking|greeting|smalltalk|faq|other\","
-                    "\"date\": \"YYYY-MM-DD|null\","
-                    "\"start_time\": \"HH:MM|null\","
-                    "\"duration_minutes\": \"int|null\","
-                    "\"service_type\": \"string|null\","
-                    "\"resource_name\": \"string|null\","
-                    "\"notes\": \"string|null\","
-                    "\"confidence\": \"0.0-1.0\""
-                    "}\n\n"
-                    f"User: {user_msg}"
-                 )},
+                {"role": "system", "content": sys},
+                {"role": "user", "content": f"Schema: {schema_hint}\nUser: {user_msg}"}
             ],
         )
         raw = (r.choices[0].message.content or "{}").strip()
         parsed = _json.loads(raw)
     except Exception:
-        log.exception("NLU error; fallback to 'other'")
-        parsed = {"intent": "other", "date": None, "start_time": None,
-                  "duration_minutes": None, "service_type": None,
-                  "resource_name": None, "notes": None, "confidence": 0.0}
+        log.exception("NLU error; fallback to OTHER")
+        parsed = {}
 
-    # Normalize types
-    parsed.setdefault("intent", "other")
-    parsed["date"] = parsed.get("date") or None
-    parsed["start_time"] = parsed.get("start_time") or None
+    # Normalize
+    intent = (parsed.get("intent") or "other").lower()
+    if intent not in INTENT_SET:
+        intent = "other"
+    out = {
+        "intent": intent,
+        "confidence": float(parsed.get("confidence") or 0.0),
+        "date": parsed.get("date") or None,
+        "start_time": parsed.get("start_time") or None,
+        "service_type": parsed.get("service_type") or None,
+        "resource_name": parsed.get("resource_name") or None,
+        "notes": parsed.get("notes") or None,
+    }
     try:
         dm = parsed.get("duration_minutes")
-        parsed["duration_minutes"] = int(dm) if dm not in (None, "", "null") else None
+        out["duration_minutes"] = int(dm) if dm not in (None, "", "null") else None
     except Exception:
-        parsed["duration_minutes"] = None
-    parsed["service_type"] = (parsed.get("service_type") or None)
-    parsed["resource_name"] = (parsed.get("resource_name") or None)
-    parsed["notes"] = (parsed.get("notes") or None)
-    try:
-        parsed["confidence"] = float(parsed.get("confidence") or 0.0)
-    except Exception:
-        parsed["confidence"] = 0.0
-    return parsed
+        out["duration_minutes"] = None
+    return out
 
-# 2) Per-sender context (merge, don’t reset)
-def _ctx_key(sender_id: str) -> str:
-    return f"ctx:{sender_id}"
 
-def _get_ctx(sender_id: str) -> dict:
-    return cache.get(_ctx_key(sender_id), {})
+def _nctx_key(sender_id: str) -> str:
+    return f"nlu_ctx:{sender_id}"
 
-def _set_ctx(sender_id: str, ctx: dict):
-    cache.set(_ctx_key(sender_id), ctx, 3600)
+def _nget_ctx(sender_id: str) -> dict:
+    return cache.get(_nctx_key(sender_id), {})
 
-def _clear_ctx(sender_id: str):
-    cache.delete(_ctx_key(sender_id))
+def _nset_ctx(sender_id: str, ctx: dict):
+    cache.set(_nctx_key(sender_id), ctx, 3600)
 
-def _merge_ctx(ctx: dict, parsed: dict) -> dict:
-    # Only overwrite fields user actually provided
+def _nclear_ctx(sender_id: str):
+    cache.delete(_nctx_key(sender_id))
+
+def _nmerge_ctx(ctx: dict, parsed: dict) -> dict:
     for k in ["date", "start_time", "duration_minutes", "service_type", "resource_name", "notes"]:
         v = parsed.get(k, None)
         if v not in (None, "", "null"):
             ctx[k] = v
     return ctx
 
-# 3) Resolve fuzzy time like “today/later”
-def _biz_tzinfo(biz: Business):
-    from zoneinfo import ZoneInfo
-    try:
-        return ZoneInfo(biz.timezone) if biz.timezone else _tz.get_current_timezone()
-    except Exception:
-        return _tz.get_current_timezone()
-
-def _round_up_15(dtobj):
-    minutes = (15 - (dtobj.minute % 15)) % 15
-    base = dtobj.replace(second=0, microsecond=0)
-    return base if minutes == 0 else base + _td(minutes=minutes)
-
-def _resolve_window(biz: Business, ctx: dict) -> tuple[datetime|None, datetime|None]:
-    """
-    Turn (date, start_time, duration_minutes) into aware start/end.
-    If missing, fill reasonable defaults based on lead time.
-    """
-    tz = _biz_tzinfo(biz)
-    now_local = _tz.now().astimezone(tz)
+def _resolve_window(biz: Business, ctx: dict) -> tuple[datetime | None, datetime | None]:
+    tz = _tz(biz)
+    now_local = timezone.now().astimezone(tz)
     cfg = getattr(biz, "availability_config", {}) or {}
     lead = int(cfg.get("lead_minutes", 0))
 
-    # date
     date_str = ctx.get("date")
     if date_str in (None, "", "null"):
-        # If the user said "later/today" the NLU should set date=today. If not, assume today.
-        date_obj = _tz.localdate()
+        date_obj = timezone.localdate()
     else:
         try:
-            date_obj = _dt.strptime(date_str, "%Y-%m-%d").date()
+            date_obj = datetime.strptime(date_str, "%Y-%m-%d").date()
         except Exception:
-            date_obj = _tz.localdate()
+            date_obj = timezone.localdate()
 
-    # start_time
     st_str = ctx.get("start_time")
     if st_str:
         try:
             hh, mm = [int(x) for x in st_str.split(":")[:2]]
-            start_naive = _dt.combine(date_obj, dtime(hh, mm))
+            start_naive = datetime.combine(date_obj, dtime(hh, mm))
         except Exception:
-            start_naive = _dt.combine(date_obj, dtime(0, 0))
+            start_naive = datetime.combine(date_obj, dtime(0, 0))
     else:
-        # If none, choose the earliest valid start after lead time (rounded)
-        min_start = now_local + _td(minutes=lead)
-        if date_obj > _tz.localdate():
-            start_naive = _dt.combine(date_obj, dtime(9, 0))  # reasonable default next-day
+        min_start = now_local + timedelta(minutes=lead)
+        if date_obj > timezone.localdate():
+            start_naive = datetime.combine(date_obj, dtime(9, 0))
         else:
             start_naive = _round_up_15(min_start).replace(tzinfo=None)
 
     start = timezone.make_aware(start_naive, tz)
-
-    # duration
     dur = int(ctx.get("duration_minutes") or 60)
-    end = start + _td(minutes=dur)
+    end = start + timedelta(minutes=dur)
     return start, end
 
-# 4) Check all active resources; pick best option(s)
 def _find_free_window_any_resource(biz: Business, start: datetime, end: datetime):
-    # Return (resource, start, end) if any active resource is free
     for r in biz.resources.filter(is_active=True).order_by("name"):
-        if is_range_free(biz, r, start, end):
+        if is_range_free and is_range_free(biz, r, start, end):
             return r, start, end
     return None, None, None
 
 def _suggest_alternatives(biz: Business, start: datetime, end: datetime, scans=6, step_minutes=30):
-    # Try +/- steps after requested start
     alts = []
     forward = start
-    for i in range(scans):
-        forward = forward + _td(minutes=step_minutes)
+    for _ in range(scans):
+        forward = forward + timedelta(minutes=step_minutes)
         r, s, e = _find_free_window_any_resource(biz, forward, forward + (end - start))
         if r:
             alts.append((r, s, e))
             break
     backward = start
-    for i in range(scans):
-        backward = backward - _td(minutes=step_minutes)
-        if backward.date() < _tz.localdate() - _td(days=1):
+    for _ in range(scans):
+        backward = backward - timedelta(minutes=step_minutes)
+        if backward.date() < timezone.localdate() - timedelta(days=1):
             break
         r, s, e = _find_free_window_any_resource(biz, backward, backward + (end - start))
         if r:
@@ -614,60 +728,47 @@ def _suggest_alternatives(biz: Business, start: datetime, end: datetime, scans=6
             break
     return alts
 
-# 5) Booking-mode brain
 def _booking_router(biz: Business, sender_id: str, user_msg: str) -> str | None:
-    """
-    Returns a human message if we handled booking/availability,
-    or None to let general AI handle smalltalk/faq/other.
-    """
     parsed = _ai_understand(biz, user_msg)
     intent = parsed.get("intent", "other")
 
-    # Only enter booking flow if the model thinks so
     if intent not in {"availability", "booking", "reservation"} and parsed.get("date") is None and parsed.get("start_time") is None:
-        return None  # let GPT smalltalk/faq handle it
+        return None
 
-    # Merge with previous context
-    ctx = _get_ctx(sender_id)
-    ctx = _merge_ctx(ctx, parsed)
+    ctx = _nget_ctx(sender_id)
+    ctx = _nmerge_ctx(ctx, parsed)
 
-    # If key fields missing, ask one question at a time (business-agnostic)
     schema = getattr(biz, "booking_schema", None) or ["date", "start_time", "duration_minutes"]
     for f in schema:
         if ctx.get(f) in (None, "", "null"):
             prompt_map = {
                 "date": "Kailan po ang booking ninyo? (hal. 2025-08-21 o 'bukas')",
                 "start_time": "Anong oras po ang start? (hal. 20:00 o 8:00 PM)",
-                "duration_minutes": "Gaano katagal po? (hal. 60, 180, 720/12 hours)"
+                "duration_minutes": "Gaano katagal po? (hal. 60, 180, 720/12 hours)",
             }
-            _set_ctx(sender_id, ctx)
+            _nset_ctx(sender_id, ctx)
             return prompt_map.get(f, f"Could you provide {f}?")
 
-    # We have enough to check availability
     start, end = _resolve_window(biz, ctx)
-
-    # Validate across all active resources
     res, s, e = _find_free_window_any_resource(biz, start, end)
     if res:
-        _clear_ctx(sender_id)  # we’re done (or you can keep to confirm later)
-        s_local = s.astimezone(_biz_tzinfo(biz)).strftime("%b %d %I:%M %p")
-        e_local = e.astimezone(_biz_tzinfo(biz)).strftime("%I:%M %p")
+        _nclear_ctx(sender_id)
+        s_local = s.astimezone(_tz(biz)).strftime("%b %d %I:%M %p")
+        e_local = e.astimezone(_tz(biz)).strftime("%I:%M %p")
         return f"Available: {s_local} – {e_local}. Free: {res.name}. I-hold ko ba?"
 
-    # No exact match → suggest alternatives (never say fully booked prematurely)
     alts = _suggest_alternatives(biz, start, end)
     if alts:
         lines = []
         for (r2, s2, e2) in alts[:2]:
-            s2l = s2.astimezone(_biz_tzinfo(biz)).strftime("%b %d %I:%M %p")
-            e2l = e2.astimezone(_biz_tzinfo(biz)).strftime("%I:%M %p")
+            s2l = s2.astimezone(_tz(biz)).strftime("%b %d %I:%M %p")
+            e2l = e2.astimezone(_tz(biz)).strftime("%I:%M %p")
             lines.append(f"• {s2l} – {e2l} ({r2.name})")
-        _set_ctx(sender_id, ctx)  # keep context so user can pick
+        _nset_ctx(sender_id, ctx)
         return "Walang exact na tugma sa hiling ninyo, pero pwede ang:\n" + "\n".join(lines) + "\n\nPili po kayo?"
 
-    _set_ctx(sender_id, ctx)
+    _nset_ctx(sender_id, ctx)
     return "Walang continuous window for that request. Gusto mo bang mag-suggest ako ng ibang oras o ibang araw?"
-# --- end AI-first router -----------------------------------------
 
 
 # =========================================================
@@ -694,7 +795,7 @@ def webhook(request, slug):
     if request.method == "POST":
         # Verify Meta signature (if set)
         if not _verify_sig(
-            biz.fb_app_secret,
+            getattr(biz, "fb_app_secret", "") or "",
             request.body,
             request.headers.get("X-Hub-Signature-256", "")
         ):
@@ -729,27 +830,21 @@ def webhook(request, slug):
                     if not text:
                         continue
 
-                # If the page token isn't configured, fail gracefully
                 if not page_token:
                     log.error("FB page token missing for biz %s", biz.slug)
                     continue
 
+                
                 _typing(page_token, sender_id, True)
                 try:
-                    # Availability-first: only handle if the helper thinks it's a booking ask
-                    # (Ensure _availability_reply returns None for non-booking messages.)
-                    avail_text = _availability_reply(biz, text, sender_id)
-                    if avail_text is not None:
-                        _send_text(page_token, sender_id, avail_text)
-                    else:
-                        # General AI reply (respects your prompt stack)
-                        reply = _ai_reply(biz, text)
-                        _send_text(page_token, sender_id, reply)
+                    reply = _route_reply(biz, sender_id, text)
+                    _send_text(page_token, sender_id, reply)
                 except Exception:
                     log.exception("Error handling message")
                     _send_text(page_token, sender_id, "Oops, nagka-issue sandali. Pakiulit po.")
                 finally:
                     _typing(page_token, sender_id, False)
+
 
         return HttpResponse("ok", status=200)
 
@@ -774,10 +869,10 @@ def _first_membership_slug(user):
 def portal_home(request):
     if not request.user.is_authenticated:
         return redirect("portal_login")
-    slug = _first_membership_slug(request.user)
-    if slug:
-        return redirect("portal_calendar", slug=slug)
-    return render(request, "portal_select.html", {"memberships": []})
+    memberships = BusinessMember.objects.select_related("business").filter(user=request.user)
+    if memberships.exists():
+        return redirect("portal_calendar", slug=memberships.first().business.slug)
+    return render(request, "portal_select.html", {"memberships": memberships})
 
 @require_http_methods(["GET", "POST"])
 def portal_login(request):
@@ -835,15 +930,10 @@ def portal_calendar(request, slug):
 # =========================================================
 
 def _biz_auth(request, biz: Business) -> bool:
-    """
-    Simple machine-to-machine auth for the portal JS.
-    Accept either ?token=... or X-Manage-Token header.
-    If biz.manage_token is blank, allow in DEBUG for local dev.
-    """
     token = request.headers.get("X-Manage-Token") or request.GET.get("token")
     if biz.manage_token:
         return token == biz.manage_token
-    return settings.DEBUG  # allow while configuring
+    return settings.DEBUG
 
 def _overlaps_qs(biz: Business, res: Resource, start, end):
     return Booking.objects.filter(
@@ -1094,3 +1184,42 @@ def about(request):
 
 def contact(request):
     return render(request, "contact.html", {})
+
+
+# --- Bot test endpoint (uses the same logic as Messenger) ---
+from django.views.decorators.http import require_http_methods as _require_http_methods
+
+@login_required
+@_require_http_methods(["POST"])
+def portal_bot_test(request, slug):
+    biz = get_object_or_404(Business, slug=slug)
+    if not _user_can_access(request.user, biz):
+        return HttpResponseForbidden("No access")
+
+    try:
+        body = json.loads(request.body.decode("utf-8") or "{}")
+    except Exception:
+        return HttpResponseBadRequest("invalid json")
+
+    text = (body.get("text") or "").strip()
+    if not text:
+        return JsonResponse({"reply": "Empty message."})
+
+    sender_id = f"portal:{request.user.id}"
+    try:
+        reply = _route_reply(biz, sender_id, text)
+    except Exception:
+        log.exception("Bot test error")
+        reply = "Oops, nagka-issue sandali. Pakiulit po."
+    return JsonResponse({"reply": reply})
+
+
+@login_required
+@_require_http_methods(["POST"])
+def portal_bot_clear_ctx(request, slug):
+    biz = get_object_or_404(Business, slug=slug)
+    if not _user_can_access(request.user, biz):
+        return HttpResponseForbidden("No access")
+    sid = f"portal:{request.user.id}"
+    _clear_ctx(biz, sid)
+    return JsonResponse({"ok": True})
