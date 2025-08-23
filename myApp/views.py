@@ -793,10 +793,10 @@ def webhook(request, slug):
     """
     biz = get_object_or_404(Business, slug=slug)
 
-    # --- Per-business kill-switch for Facebook Messenger ---
-    if not getattr(biz, "messenger_enabled", True):
-        # No-op for both GET and POST to avoid Meta retries/spam.
-        # We intentionally *don't* echo the hub.challenge when disabled.
+    # --- Messenger kill-switch (POST only) ---
+    # If Messenger is disabled, do nothing for incoming events but still return 200
+    # so Meta doesn't retry. GET verification is left intact.
+    if request.method == "POST" and not getattr(biz, "messenger_enabled", True):
         return HttpResponse("Messenger channel disabled", status=200)
 
     # Verification (GET)
@@ -824,6 +824,7 @@ def webhook(request, slug):
             return HttpResponse("Bad JSON", status=400)
 
         page_token = getattr(biz, "fb_page_access_token", "")
+
         for entry in payload.get("entry", []):
             for event in entry.get("messaging", []):
                 msg = event.get("message", {}) or {}
@@ -847,11 +848,12 @@ def webhook(request, slug):
                     if not text:
                         continue
 
+                # If there is no page token, don't attempt to send anything
                 if not page_token:
-                    log.error("FB page token missing for biz %s", biz.slug)
-                    # Do not attempt to send anything if token is missing
+                    log.warning("No FB page token for biz %s; skipping send.", biz.slug)
                     continue
 
+                # Normal path: route + send
                 _typing(page_token, sender_id, True)
                 try:
                     reply = _route_reply(biz, sender_id, text)
@@ -1269,7 +1271,6 @@ def portal_toggle_ai(request, slug):
 
     biz.save(update_fields=["ai_enabled", "updated_at"])
     return JsonResponse({"ok": True, "ai_enabled": biz.ai_enabled})
-
 
 @login_required
 @require_http_methods(["POST"])
