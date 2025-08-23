@@ -57,6 +57,7 @@ class Business(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    ai_enabled = models.BooleanField(default=True, help_text="Turn AI router on/off for this business")
 
     class Meta:
         ordering = ["name"]

@@ -24,6 +24,23 @@
         </div>
       </div>
       <nav class="flex items-center gap-3">
+        <!-- AI toggle -->
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-slate-500">AI</span>
+          <button id="aiToggleBtn"
+                  data-enabled="{{ biz.ai_enabled|yesno:'true,false' }}"
+                  class="text-xs px-3 py-2 rounded-lg {{ biz.ai_enabled|yesno:'bg-emerald-100 text-emerald-700 hover:bg-emerald-200,bg-slate-100 text-slate-600 hover:bg-slate-200' }}">
+            {{ biz.ai_enabled|yesno:"On,Off" }}
+          </button>
+        </div>
+        <div class="flex items-center gap-2">
+        <span class="text-xs text-slate-500">FB</span>
+        <button id="fbToggleBtn"
+                class="text-xs px-3 py-2 rounded-lg {{ biz.messenger_enabled|yesno:'bg-emerald-100 text-emerald-700 hover:bg-emerald-200,bg-slate-100 text-slate-600 hover:bg-slate-200' }}">
+          {{ biz.messenger_enabled|yesno:"On,Off" }}
+        </button>
+      </div>
+
         <a href="{% url 'portal_calendar' slug=biz.slug %}" class="text-sm px-3 py-2 rounded-lg bg-slate-100 hover:bg-slate-200">Calendar</a>
         <a href="{% url 'portal_resources' slug=biz.slug %}" class="text-sm px-3 py-2 rounded-lg bg-slate-100 hover:bg-slate-200">Resources</a>
         <a href="{% url 'portal_logout' %}" class="text-sm px-3 py-2 rounded-lg bg-rose-100 text-rose-700 hover:bg-rose-200">Logout</a>
@@ -86,7 +103,14 @@
       <section class="lg:col-span-2">
         <div class="bg-white rounded-2xl shadow-sm border border-slate-200 flex flex-col h-[70vh]">
           <div class="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
-            <h2 class="text-base font-semibold">Bot Playground</h2>
+            <div class="flex items-center gap-2">
+              <h2 class="text-base font-semibold">Bot Playground</h2>
+              {% if biz.ai_enabled %}
+                <span id="aiStatusPill" class="inline-flex items-center text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">AI ON</span>
+              {% else %}
+                <span id="aiStatusPill" class="inline-flex items-center text-xs px-2 py-0.5 rounded-full bg-rose-100 text-rose-700">AI OFF</span>
+              {% endif %}
+            </div>
             <div class="text-xs text-slate-500">Talk to your assistant exactly like a customer would.</div>
           </div>
 
@@ -182,8 +206,80 @@
       sendMessage(text);
     });
 
-    // Starter msg
-    bubble('bot', 'Hello! You can test me here. Ask about availability, make a booking, or smalltalk 😊');
+    // ----- AI toggle wiring -----
+    const aiToggleBtn = document.getElementById('aiToggleBtn');
+    const aiStatusPill = document.getElementById('aiStatusPill');
+
+    async function toggleAI(){
+      if(!aiToggleBtn) return;
+      const original = aiToggleBtn.textContent;
+      aiToggleBtn.disabled = true;
+      aiToggleBtn.textContent = '...';
+
+      try{
+        const res = await fetch("{% url 'portal_toggle_ai' slug=biz.slug %}", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-CSRFToken": CSRF
+          },
+          body: JSON.stringify({ toggle: true })
+        });
+        const data = await res.json();
+        if(!data.ok) throw new Error('toggle failed');
+
+        const enabled = !!data.ai_enabled;
+
+        // Button visuals
+        aiToggleBtn.textContent = enabled ? 'On' : 'Off';
+        aiToggleBtn.className = "text-xs px-3 py-2 rounded-lg " +
+          (enabled ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
+                   : "bg-slate-100 text-slate-600 hover:bg-slate-200");
+
+        // Status pill
+        if(aiStatusPill){
+          aiStatusPill.textContent = enabled ? 'AI ON' : 'AI OFF';
+          aiStatusPill.className = "inline-flex items-center text-xs px-2 py-0.5 rounded-full " +
+            (enabled ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700");
+        }
+
+        bubble('bot', enabled ? 'AI routing enabled for this business.' : 'AI routing disabled. Using basic availability only.');
+      } catch(e){
+        bubble('bot', 'Failed to toggle AI setting.');
+      } finally {
+        aiToggleBtn.disabled = false;
+        if(aiToggleBtn.textContent === '...') aiToggleBtn.textContent = original;
+      }
+    }
+
+    if(aiToggleBtn){
+      aiToggleBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        toggleAI();
+      });
+    }
+
+    // Starter msg reflects current mode
+    bubble('bot', `Hello! You can test me here. AI is {{ biz.ai_enabled|yesno:"ON,OFF" }}. Ask about availability, make a booking, or smalltalk 😊`);
+
+
+     const fbToggleBtn = document.getElementById('fbToggleBtn');
+  fbToggleBtn?.addEventListener('click', async (e) => {
+    e.preventDefault();
+    const res = await fetch("{% url 'portal_toggle_messenger' slug=biz.slug %}", {
+      method: "POST",
+      headers: {"Content-Type":"application/json","X-CSRFToken":"{{ csrf|default:'' }}"},
+      body: JSON.stringify({toggle:true})
+    });
+    const data = await res.json();
+    if(data.ok){
+      const on = !!data.messenger_enabled;
+      fbToggleBtn.textContent = on ? "On" : "Off";
+      fbToggleBtn.className = "text-xs px-3 py-2 rounded-lg " + (on
+        ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
+        : "bg-slate-100 text-slate-600 hover:bg-slate-200");
+    }
+  });
   </script>
 </body>
 </html>

@@ -36,4 +36,7 @@ urlpatterns = [
     path("portal/<slug:slug>/bot-test/", views.portal_bot_test, name="portal_bot_test"),
     path("portal/<slug:slug>/bot-test/clear", views.portal_bot_clear_ctx, name="portal_bot_clear_ctx"),
 
+    path("portal/<slug:slug>/ai-toggle/", views.portal_toggle_ai, name="portal_toggle_ai"),
+    path("portal/<slug:slug>/messenger-toggle/", views.portal_toggle_messenger, name="portal_toggle_messenger"),
+
 ]

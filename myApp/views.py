@@ -543,24 +543,35 @@ def _availability_reply(
 
 def _route_reply(biz: Business, sender_id: str, text: str) -> str:
     """
-    AI-centered router:
-      - If AI says intent is availability/booking/reservation → run availability flow
-      - Else → general AI reply using full business prompt stack
+    Per-business AI switch:
+      - If biz.ai_enabled == True → AI-first routing with _ai_understand/_ai_reply
+      - If biz.ai_enabled == False → no model calls; minimal availability-only path
     """
-    parsed = _ai_understand(biz, text)
-    intent = parsed.get("intent", "other")
+    if getattr(biz, "ai_enabled", True):
+        # --- AI ON: use the model to decide intent, then respond ---
+        parsed = _ai_understand(biz, text)
+        intent = parsed.get("intent", "other")
 
-    if intent in {"availability", "booking", "reservation"}:
-        # Let availability flow use AI-extracted entities
-        reply = _availability_reply(biz, text, sender_id, parsed=parsed)
-        if reply:
-            return reply
-        # If availability needed more details, it already returned a follow-up question.
-        # As a safety net, fall back to general AI:
+        if intent in {"availability", "booking", "reservation"}:
+            reply = _availability_reply(biz, text, sender_id, parsed=parsed)
+            # If availability flow asked a follow-up, it already returned a message.
+            return reply or _ai_reply(biz, text)
+
+        # Non-booking (pricing, inventory, policy, greeting, faq, etc.)
         return _ai_reply(biz, text)
 
-    # Non-booking intents (pricing, inventory, policy, greeting, smalltalk, faq, other)
-    return _ai_reply(biz, text)
+    # --- AI OFF: never call the model. Offer basic availability help if possible. ---
+    when = _parse_when(text, biz)
+    date_only = _parse_date_only(text, biz)
+
+    if (isinstance(when[0], datetime) and isinstance(when[1], datetime)) or (date_only and when == (date_only, None)):
+        # Use the existing availability flow with local parsers only
+        return _availability_reply(biz, text, sender_id, parsed=None)
+
+    # Plain, predictable message when AI is disabled
+    return ("Automated AI replies are OFF for this business. "
+            "You can send a date/time to check availability (e.g., “Aug 24 2–4pm”), "
+            "or enable AI in the Portal.")
 
 
 # =========================================================
@@ -782,6 +793,12 @@ def webhook(request, slug):
     """
     biz = get_object_or_404(Business, slug=slug)
 
+    # --- Per-business kill-switch for Facebook Messenger ---
+    if not getattr(biz, "messenger_enabled", True):
+        # No-op for both GET and POST to avoid Meta retries/spam.
+        # We intentionally *don't* echo the hub.challenge when disabled.
+        return HttpResponse("Messenger channel disabled", status=200)
+
     # Verification (GET)
     if request.method == "GET":
         token = request.GET.get("hub.verify_token")
@@ -832,9 +849,9 @@ def webhook(request, slug):
 
                 if not page_token:
                     log.error("FB page token missing for biz %s", biz.slug)
+                    # Do not attempt to send anything if token is missing
                     continue
 
-                
                 _typing(page_token, sender_id, True)
                 try:
                     reply = _route_reply(biz, sender_id, text)
@@ -845,10 +862,10 @@ def webhook(request, slug):
                 finally:
                     _typing(page_token, sender_id, False)
 
-
         return HttpResponse("ok", status=200)
 
     return HttpResponse(status=405)
+
 
 
 # =========================================================
@@ -1223,3 +1240,59 @@ def portal_bot_clear_ctx(request, slug):
     sid = f"portal:{request.user.id}"
     _clear_ctx(biz, sid)
     return JsonResponse({"ok": True})
+
+
+
+@login_required
+@require_http_methods(["POST"])
+def portal_toggle_ai(request, slug):
+    """
+    Toggle or set the per-business AI switch.
+    Body:
+      {"toggle": true} OR {"enabled": true/false}
+    """
+    biz = get_object_or_404(Business, slug=slug)
+    if not _user_can_access(request.user, biz):
+        return HttpResponseForbidden("No access")
+
+    try:
+        body = json.loads(request.body.decode("utf-8") or "{}")
+    except Exception:
+        return HttpResponseBadRequest("invalid json")
+
+    if "enabled" in body:
+        biz.ai_enabled = bool(body.get("enabled"))
+    elif body.get("toggle"):
+        biz.ai_enabled = not bool(getattr(biz, "ai_enabled", True))
+    else:
+        return HttpResponseBadRequest("expected 'enabled' or 'toggle'")
+
+    biz.save(update_fields=["ai_enabled", "updated_at"])
+    return JsonResponse({"ok": True, "ai_enabled": biz.ai_enabled})
+
+
+@login_required
+@require_http_methods(["POST"])
+def portal_toggle_messenger(request, slug):
+    """
+    Toggle or set the per-business Messenger switch.
+    Body: {"toggle": true} OR {"enabled": true/false}
+    """
+    biz = get_object_or_404(Business, slug=slug)
+    if not _user_can_access(request.user, biz):
+        return HttpResponseForbidden("No access")
+
+    try:
+        body = json.loads(request.body.decode("utf-8") or "{}")
+    except Exception:
+        return HttpResponseBadRequest("invalid json")
+
+    if "enabled" in body:
+        biz.messenger_enabled = bool(body.get("enabled"))
+    elif body.get("toggle"):
+        biz.messenger_enabled = not bool(getattr(biz, "messenger_enabled", True))
+    else:
+        return HttpResponseBadRequest("expected 'enabled' or 'toggle'")
+
+    biz.save(update_fields=["messenger_enabled", "updated_at"])
+    return JsonResponse({"ok": True, "messenger_enabled": biz.messenger_enabled})
