@@ -1,38 +1,40 @@
-# messenger_bot/models.py
+# myApp/models.py
 from django.db import models
 from django.core.validators import MinValueValidator, MaxValueValidator
 
-# ---- Calendar/availability provider choices (extensible) ----
 AVAILABILITY_PROVIDERS = [
-    ("internal_calendar", "Internal Calendar"),   # this file (day toggles + slots)
-    ("google_calendar", "Google Calendar"),       # future: adapter-based expansion
+    ("internal_calendar", "Internal Calendar"),
+    ("google_calendar", "Google Calendar"),
 ]
-
 
 class Business(models.Model):
     name = models.CharField(max_length=120)
     slug = models.SlugField(unique=True)
 
-    # Messenger creds (keep as-is; used by your bot)
+    # Messenger creds
     fb_page_access_token = models.TextField(help_text="Page Access Token")
     fb_verify_token = models.CharField(max_length=255, help_text="Webhook verify token (Meta will call this)")
     fb_app_secret = models.CharField(max_length=255, help_text="For X-Hub-Signature-256 validation")
 
-    # AI config (keep as-is)
+    # AI config
     model_name = models.CharField(max_length=64, default="gpt-4o-mini")
     temperature = models.FloatField(default=0.4, validators=[MinValueValidator(0.0), MaxValueValidator(2.0)])
     max_tokens = models.PositiveIntegerField(default=300)
 
-    # Prompt stack (keep as-is)
+    # Prompt stack
     system_prompt = models.TextField(help_text="Brand voice / core instructions")
     business_context = models.TextField(blank=True, help_text="Hours, contacts, etc")
 
-    # UX / guardrails (keep as-is)
+    # UX / guardrails
     quick_replies = models.JSONField(default=list, blank=True)
     blocked_keywords = models.JSONField(default=list, blank=True)
 
-    # Meta (keep as-is)
+    # Meta
     timezone = models.CharField(max_length=64, default="Asia/Manila")
+
+    # NEW: feature switches
+    ai_enabled = models.BooleanField(default=True, help_text="Master switch for AI routing/replies")
+    messenger_enabled = models.BooleanField(default=True, help_text="Master switch for Messenger replies")
 
     # NEW: lightweight management/auth + provider selection
     manage_token = models.CharField(
@@ -40,30 +42,27 @@ class Business(models.Model):
         help_text="Optional shared secret for simple API management endpoints"
     )
     availability_provider = models.CharField(
-        max_length=40, choices=AVAILABILITY_PROVIDERS,
-        default="internal_calendar",
+        max_length=40, choices=AVAILABILITY_PROVIDERS, default="internal_calendar",
         help_text="Which availability backend to use for this business"
     )
     availability_config = models.JSONField(
-        default=dict, blank=True,
-        help_text="Provider-specific config (e.g. calendar IDs, API creds)"
+        default=dict, blank=True, help_text="Provider-specific config (e.g. calendar IDs, API creds)"
     )
 
     booking_schema = models.JSONField(
-    default=list, blank=True,
-    help_text="List of required fields: e.g. ['date', 'time', 'service_type', 'stylist']"
+        default=list, blank=True,
+        help_text="List of required fields: e.g. ['date', 'time', 'service_type', 'stylist']"
     )
-
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
-    ai_enabled = models.BooleanField(default=True, help_text="Turn AI router on/off for this business")
 
     class Meta:
         ordering = ["name"]
 
     def __str__(self):
         return self.name
+
     
 
 from django.conf import settings

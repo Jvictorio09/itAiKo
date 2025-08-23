@@ -39,4 +39,7 @@ urlpatterns = [
     path("portal/<slug:slug>/ai-toggle/", views.portal_toggle_ai, name="portal_toggle_ai"),
     path("portal/<slug:slug>/messenger-toggle/", views.portal_toggle_messenger, name="portal_toggle_messenger"),
 
+    path("portal/<slug:slug>/mute/", views.portal_mute, name="portal_mute"),
+    path("portal/<slug:slug>/unmute/", views.portal_unmute, name="portal_unmute"),
+
 ]

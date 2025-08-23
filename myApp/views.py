@@ -60,11 +60,28 @@ def _tz(biz: Business):
         except Exception:
             pass
     try:
-        # Django current tz is a tzinfo object
         return timezone.get_current_timezone()
     except Exception:
-        # Final fallback
         return ZoneInfo("UTC")
+
+
+# =========================================================
+# Mute helpers (per-business, cache-based)
+# =========================================================
+
+def _mute_cache_key(biz: Business) -> str:
+    return f"biz_muted:{biz.id}"
+
+def _is_muted(biz: Business) -> bool:
+    return bool(cache.get(_mute_cache_key(biz), False))
+
+def _mute_for(biz: Business, minutes: int | None = None):
+    """Mute Messenger replies for this business. If minutes is None, mute for 7 days."""
+    ttl = 7 * 24 * 60 * 60 if minutes is None else max(1, int(minutes)) * 60
+    cache.set(_mute_cache_key(biz), True, ttl)
+
+def _unmute(biz: Business):
+    cache.delete(_mute_cache_key(biz))
 
 
 # =========================================================
@@ -201,7 +218,6 @@ def _round_up_15(dtobj: datetime):
     base = dtobj.replace(second=0, microsecond=0)
     return base if minutes == 0 else base + timedelta(minutes=minutes)
 
-# duration parsing
 def _parse_duration_minutes(text: str) -> int | None:
     t = (text or "").lower()
     m = re.search(r'(\d{1,2})\s*(h|hr|hrs|hour|hours)\b', t)
@@ -216,7 +232,6 @@ def _parse_duration_minutes(text: str) -> int | None:
         return 12 * 60
     return None
 
-# context utilities
 def _get_last_start(biz: Business, sid: str):
     ctx = _get_ctx_avail(biz, sid)
     iso = ctx.get("last_start")
@@ -227,7 +242,6 @@ def _get_last_start(biz: Business, sid: str):
     except Exception:
         return None
 
-# recognizers / regexes
 NOW_WORDS_RE = re.compile(r"\b(now( na)?|right now|ngayon( na)?)\b", re.I)
 LATER_WORDS_RE = re.compile(r"\b(later|mamaya(?:ng)?(?: gabi)?|tonight)\b", re.I)
 TOMORROW_WORDS_RE = re.compile(r"\b(bukas|tomorrow)\b", re.I)
@@ -242,7 +256,7 @@ def _to_24h(h: int, m: int, ampm: str):
     return h, m
 
 def _parse_times(text: str):
-    t = re.sub(r"\bto\b", "-", text, flags=re.I)  # "2 to 4pm" -> "2-4pm"
+    t = re.sub(r"\bto\b", "-", text, flags=re.I)
     t = t.replace("–", "-").replace("—", "-")
     out = []
     for m in _TIME_RE.finditer(t):
@@ -263,14 +277,12 @@ def _parse_times(text: str):
 def _parse_date_only(text: str, biz) -> datetime.date | None:
     t = (text or "").lower()
     today = timezone.localdate()
-
     if "today" in t or "ngayon" in t:
         return today
     if TOMORROW_WORDS_RE.search(t):
         return today + timedelta(days=1)
     if LATER_WORDS_RE.search(t):
         return today
-
     m = re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b", text or "")
     if m:
         try:
@@ -278,7 +290,6 @@ def _parse_date_only(text: str, biz) -> datetime.date | None:
             return datetime(y, mo, d).date()
         except ValueError:
             pass
-
     m2 = re.search(r"\b([A-Za-z]{3,9})\s+(\d{1,2})(?:,\s*(\d{4}))?\b", text or "")
     if m2:
         try:
@@ -348,34 +359,9 @@ def _remember_hints_from_text(biz: Business, sid: str, text: str):
     elif TOMORROW_WORDS_RE.search(t):
         _update_ctx(biz, sid, hint_date=(today + timedelta(days=1)).isoformat())
 
-# --- booking intent quick detector ---
-BOOKING_KEYWORDS_RE = re.compile(
-    r"\b(book|booking|reserve|reservation|rent|availability|available|schedule|slot|hold|"
-    r"magpa(?:-|\s)?book|pa(?:-|\s)?reserve|pahold|pa(?:-|\s)?book)\b",
-    re.I
-)
-
-def _looks_bookingish(text: str) -> bool:
-    t = (text or "").strip()
-    if not t:
-        return False
-    if BOOKING_KEYWORDS_RE.search(t):
-        return True
-    # obvious temporal hints
-    if NOW_WORDS_RE.search(t) or LATER_WORDS_RE.search(t) or TOMORROW_WORDS_RE.search(t):
-        return True
-    # time or date patterns (e.g., "2pm", "Aug 21", "2025-08-21")
-    if _parse_times(t):
-        return True
-    if re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b", t) or re.search(r"\b([A-Za-z]{3,9})\s+\d{1,2}\b", t):
-        return True
-    # duration words (hour/day/overnight/half day)
-    if _parse_duration_minutes(t):
-        return True
-    return False
 
 # =========================================================
-# Availability reply (with "booking-ish" gate)
+# Availability reply (AI-entity aware)
 # =========================================================
 
 def _availability_reply(
@@ -386,7 +372,6 @@ def _availability_reply(
 ) -> str | None:
     sid = sender_id or "anon"
 
-    # Use AI-extracted entities when given; otherwise parse text.
     ai_date = (parsed or {}).get("date")
     ai_start = (parsed or {}).get("start_time")
     ai_dur = (parsed or {}).get("duration_minutes")
@@ -397,7 +382,7 @@ def _availability_reply(
 
     desired_minutes = ai_dur or _parse_duration_minutes(text) or 60
 
-    # If AI provided date/time, construct 'when' directly; else use local parser.
+    # Construct 'when' using AI entities if present
     if ai_date and ai_start:
         try:
             tz = _tz(biz)
@@ -473,7 +458,7 @@ def _availability_reply(
             return "Mukhang occupied ang oras na ’yan. May iba ka bang oras?"
 
     # 2) Date only (maybe with duration)
-    if date_only and when == (date_only, None):
+    if (date_only and when == (date_only, None)):
         if last_start and last_start.date() == date_only and desired_minutes != 60:
             start = last_start
             end = start + timedelta(minutes=desired_minutes)
@@ -548,27 +533,22 @@ def _route_reply(biz: Business, sender_id: str, text: str) -> str:
       - If biz.ai_enabled == False → no model calls; minimal availability-only path
     """
     if getattr(biz, "ai_enabled", True):
-        # --- AI ON: use the model to decide intent, then respond ---
         parsed = _ai_understand(biz, text)
         intent = parsed.get("intent", "other")
 
         if intent in {"availability", "booking", "reservation"}:
             reply = _availability_reply(biz, text, sender_id, parsed=parsed)
-            # If availability flow asked a follow-up, it already returned a message.
             return reply or _ai_reply(biz, text)
 
-        # Non-booking (pricing, inventory, policy, greeting, faq, etc.)
         return _ai_reply(biz, text)
 
-    # --- AI OFF: never call the model. Offer basic availability help if possible. ---
+    # AI OFF: never call the model.
     when = _parse_when(text, biz)
     date_only = _parse_date_only(text, biz)
 
     if (isinstance(when[0], datetime) and isinstance(when[1], datetime)) or (date_only and when == (date_only, None)):
-        # Use the existing availability flow with local parsers only
         return _availability_reply(biz, text, sender_id, parsed=None)
 
-    # Plain, predictable message when AI is disabled
     return ("Automated AI replies are OFF for this business. "
             "You can send a date/time to check availability (e.g., “Aug 24 2–4pm”), "
             "or enable AI in the Portal.")
@@ -590,7 +570,6 @@ def _ai_understand(biz: Business, user_msg: str) -> dict:
     """
     AI-first router. Classifies the user's intent using the business's
     system prompt + context + snippets. No keyword heuristics.
-    Returns a normalized dict; missing fields → None.
     """
     if not OPENAI_API_KEY:
         return {
@@ -599,7 +578,6 @@ def _ai_understand(biz: Business, user_msg: str) -> dict:
             "service_type": None, "resource_name": None, "notes": None
         }
 
-    # Build a router-focused system message using your prompt stack
     sys = (
         _compose_prompt(biz)
         + "\n\nYou are an intent router and entity extractor for this business. "
@@ -639,7 +617,6 @@ def _ai_understand(biz: Business, user_msg: str) -> dict:
         log.exception("NLU error; fallback to OTHER")
         parsed = {}
 
-    # Normalize
     intent = (parsed.get("intent") or "other").lower()
     if intent not in INTENT_SET:
         intent = "other"
@@ -793,11 +770,11 @@ def webhook(request, slug):
     """
     biz = get_object_or_404(Business, slug=slug)
 
-    # --- Messenger kill-switch (POST only) ---
-    # If Messenger is disabled, do nothing for incoming events but still return 200
-    # so Meta doesn't retry. GET verification is left intact.
-    if request.method == "POST" and not getattr(biz, "messenger_enabled", True):
-        return HttpResponse("Messenger channel disabled", status=200)
+    # --- Hard kill for Messenger traffic (POST) ---
+    # If Messenger is disabled OR business is muted, acknowledge 200 and do nothing.
+    if request.method == "POST":
+        if not getattr(biz, "messenger_enabled", True) or _is_muted(biz):
+            return HttpResponse("Messenger channel muted/disabled", status=200)
 
     # Verification (GET)
     if request.method == "GET":
@@ -841,12 +818,35 @@ def webhook(request, slug):
                 if not text:
                     continue
 
-                # Strip hashtag commands like "#manual hi"
+                # --- Admin commands for quick control (single ack, then silence) ---
+                #   #mute            -> mute for 7 days
+                #   #mute 60         -> mute for 60 minutes
+                #   #unmute          -> unmute
                 if text.startswith("#"):
+                    cmd = text.strip().lower()
+                    if cmd == "#mute":
+                        _mute_for(biz, None)
+                        # Optional ack once; comment the next two lines if you want absolute silence immediately
+                        if page_token:
+                            _send_text(page_token, sender_id, "Muted for 7 days. ✋")
+                        continue
+                    m = re.match(r"#mute\s+(\d+)", cmd)
+                    if m:
+                        _mute_for(biz, int(m.group(1)))
+                        if page_token:
+                            _send_text(page_token, sender_id, f"Muted for {m.group(1)} minutes. ✋")
+                        continue
+                    if cmd == "#unmute":
+                        _unmute(biz)
+                        if page_token:
+                            _send_text(page_token, sender_id, "Unmuted. ✅")
+                        continue
+                    # Strip other hashtags like "#manual hi"
                     parts = text.split(maxsplit=1)
                     text = parts[1].strip() if len(parts) > 1 else ""
                     if not text:
                         continue
+                # --- end admin commands ---
 
                 # If there is no page token, don't attempt to send anything
                 if not page_token:
@@ -1008,7 +1008,6 @@ def create_booking(request, slug, resource_id):
 
     res = get_object_or_404(Resource, pk=resource_id, business=biz)
 
-    # Capacity check
     if _overlaps_qs(biz, res, start, end).count() >= max(1, res.capacity):
         return JsonResponse({"ok": False, "reason": "conflict"}, status=409)
 
@@ -1135,7 +1134,6 @@ def portal_api_resources(request, slug):
         ]
         return JsonResponse({"resources": data})
 
-    # POST create
     try:
         body = json.loads(request.body.decode("utf-8") or "{}")
     except Exception:
@@ -1180,7 +1178,6 @@ def portal_api_resource_detail(request, slug, resource_id):
         r.save()
         return JsonResponse({"id": r.id, "name": r.name, "capacity": r.capacity, "is_active": r.is_active})
 
-    # DELETE
     r.delete()
     return JsonResponse({"ok": True})
 
@@ -1244,6 +1241,9 @@ def portal_bot_clear_ctx(request, slug):
     return JsonResponse({"ok": True})
 
 
+# ----------------------------
+# Portal toggles + mute control
+# ----------------------------
 
 @login_required
 @require_http_methods(["POST"])
@@ -1297,3 +1297,36 @@ def portal_toggle_messenger(request, slug):
 
     biz.save(update_fields=["messenger_enabled", "updated_at"])
     return JsonResponse({"ok": True, "messenger_enabled": biz.messenger_enabled})
+
+@login_required
+@require_http_methods(["POST"])
+def portal_mute(request, slug):
+    """
+    Mute Messenger replies for this business (cache-based).
+    Body: {"minutes": 60} or omit for default 7 days.
+    """
+    biz = get_object_or_404(Business, slug=slug)
+    if not _user_can_access(request.user, biz):
+        return HttpResponseForbidden("No access")
+    try:
+        body = json.loads(request.body.decode("utf-8") or "{}")
+    except Exception:
+        return HttpResponseBadRequest("invalid json")
+
+    minutes = body.get("minutes")
+    try:
+        minutes = int(minutes) if minutes is not None else None
+    except Exception:
+        minutes = None
+    _mute_for(biz, minutes)
+    return JsonResponse({"ok": True, "muted": True, "minutes": minutes})
+
+@login_required
+@require_http_methods(["POST"])
+def portal_unmute(request, slug):
+    """Unmute Messenger replies for this business."""
+    biz = get_object_or_404(Business, slug=slug)
+    if not _user_can_access(request.user, biz):
+        return HttpResponseForbidden("No access")
+    _unmute(biz)
+    return JsonResponse({"ok": True, "muted": False})
